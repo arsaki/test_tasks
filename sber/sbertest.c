@@ -24,15 +24,22 @@
  */
 
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/init.h> 
-#include <linux/prinkt.h>
+#include <linux/printk.h>
+
+static char *mode_string = "default";
+
+module_param(mode_string, charp, 0000);
+MODULE_PARM_DESC(mode_string, "Select  mode: default/single/multiple");
 
 static int __init module_start(void){
+	pr_info("sbertask module successfully loaded");
 	return 0;
 }
 
 static void __exit module_stop(void){
-
+	pr_info("sbertask module unloaded");
 }
 
 module_init(module_start);
