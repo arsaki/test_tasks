@@ -7,7 +7,7 @@ then
 	exit 1
 fi
 
-echo -n "Loading driver.....			"
+echo -n "Loading driver.....				"
 insmod sbertask.ko
 if [ $?  = 0 ]
 then
