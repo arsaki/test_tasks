@@ -27,6 +27,7 @@
 #include <linux/printk.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
+#include <linux/list.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Arsenii Akimov <arseniumfrela@bk.ru>");
@@ -36,10 +37,17 @@ static char *mode_string = "default";
 module_param(mode_string, charp, 0000);
 MODULE_PARM_DESC(mode_string, "Select  mode: default/single/multiple");
 
-#define BUFFER_SIZE 1000
+#define QUEUE_DEPTH 1000
 #define DEVICE_NAME "sbertask"
 
 static int major_number;
+static kmem_cache_t *queue_cache;
+
+
+struct queue {
+	struct list_head list;
+	char data;
+}
 
 static int sbertask_open (struct inode *inode, struct file *file_p)
 {
@@ -76,7 +84,6 @@ const struct file_operations f_ops = {
 
 static int __init module_start(void)
 {
-	pr_info("sbertask: module successfully loaded\n");
 	pr_info("sbertask: mode %s\n", mode_string);
 	major_number = register_chrdev(0, DEVICE_NAME, &f_ops);
 	if (major_number < 0){
@@ -85,6 +92,11 @@ static int __init module_start(void)
 	}
 	else
 		pr_info("sbertask: assigned major number %d\n", major_number);
+	queue_cache = kmem_cache_create("sbertask_queue", QUEUE_DEPTH, 0, 0, )
+
+
+
+	pr_info("sbertask: module successfully loaded\n");
 	return 0;
 };
 
