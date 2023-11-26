@@ -62,9 +62,10 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 };
 
 static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t length, loff_t *off_p)
-{	
-	struct queue *to_delete_queue;
+{		
+	struct queue *tmp_queue;
 	pr_info("sbertask: read\n");
+
 	if(!queue_length)
 	{
 		pr_info("sbertask: queue is empty\n");
@@ -72,13 +73,22 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	}
 	if(put_user(queue_head->data, buf))
 	{
-		pr_err("sbertask: Can't put data to userspace!\n");
+		pr_err("sbertask: can't put data to userspace!\n");
 		return -EINVAL;
 	}
-	to_delete_queue = queue_head;
-	queue_head = list_entry(queue_head->list.next, struct queue, list);
-	list_del(&to_delete_queue->list);
-	kmem_cache_free(queue_cache, to_delete_queue);
+	pr_info("sbertask: sended char %c\n", queue_head->data);
+
+	if(queue_length > 1)
+	{
+		tmp_queue = queue_head;
+		queue_head = list_entry(queue_head->list.next, struct queue, list);
+		list_del(&tmp_queue->list);
+		kmem_cache_free(queue_cache, tmp_queue);
+	}	
+	if(queue_length == 1)
+	{
+		kmem_cache_free(queue_cache, queue_head);
+	}
 	queue_length--;
 	return 1;
 };
@@ -91,19 +101,29 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 		pr_info("sbertask: queue full");
 		return 0;
 	}
-	queue_tail = kmem_cache_alloc(queue_cache, GFP_KERNEL);
-	if (queue_tail == NULL)
+	if (queue_length == 0)
 	{
-		pr_err("sbertask: can't allocate queue element!\n");
-		return -EINVAL;
+		pr_info("sbertask: making new queue list");
+		queue_head = kmem_cache_alloc(queue_cache, GFP_KERNEL);
+		INIT_LIST_HEAD(&queue_head->list);
+		queue_tail = queue_head;	
 	}
-	list_add_tail(&queue_tail->list, &queue_head->list);
-	queue_length++;
+	else
+	{
+		queue_tail = kmem_cache_alloc(queue_cache, GFP_KERNEL);
+		if (queue_tail == NULL)
+		{
+			pr_err("sbertask: can't allocate queue element!\n");
+			return -EINVAL;
+		}
+		list_add_tail(&queue_tail->list, &queue_head->list);
+	};
 	if (get_user (queue_tail->data, buf))
 	{
 		pr_err("sbertask: can't get data from userspace\n");
 		return -EINVAL;
 	}
+	queue_length++;
 	pr_info("sbertask: getted '%c'", queue_tail->data);
 	return 1;
 };
@@ -134,8 +154,7 @@ static int __init module_start(void)
 	}
 	pr_info("sbertask: assigned major number %d\n", major_number);
 	queue_cache = kmem_cache_create("sbertask_queue", sizeof(struct queue)*QUEUE_DEPTH, 0, SLAB_HWCACHE_ALIGN, NULL);
-	queue_head = kmem_cache_alloc(queue_cache, GFP_KERNEL);
-	INIT_LIST_HEAD(&queue_head->list);
+
 	pr_info("sbertask: module successfully loaded\n");
 	return 0;
 };
