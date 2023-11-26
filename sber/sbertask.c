@@ -30,6 +30,7 @@
 #include <linux/slab.h>
 #include <linux/slab_def.h>
 #include <linux/list.h>
+#include <linux/mutex.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Arsenii Akimov <arseniumfrela@bk.ru>");
@@ -53,6 +54,8 @@ struct queue {
 
 struct queue *queue_head;
 struct queue *queue_tail;
+DEFINE_MUTEX(read_mutex);
+
 
 static int sbertask_open (struct inode *inode, struct file *file_p)
 {
@@ -69,6 +72,8 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	if(!queue_length)
 	{
 		pr_info("sbertask: queue is empty\n");
+		mutex_lock(&read_mutex);
+		mutex_lock(&read_mutex);
 		return 0;
 	}
 	if(put_user(queue_head->data, buf))
@@ -117,6 +122,7 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 			return -EINVAL;
 		}
 		list_add_tail(&queue_tail->list, &queue_head->list);
+		mutex_unlock(&read_mutex);
 	};
 	if (get_user (queue_tail->data, buf))
 	{
@@ -132,6 +138,7 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 static int sbertask_release (struct inode *inode, struct file *file_p)
 {
 	module_put(THIS_MODULE);
+	mutex_unlock(&read_mutex);
 	pr_info("sbertask: device %s closed\n", DEVICE_NAME);
 	return 0;
 };
@@ -154,15 +161,18 @@ static int __init module_start(void)
 	}
 	pr_info("sbertask: assigned major number %d\n", major_number);
 	queue_cache = kmem_cache_create("sbertask_queue", sizeof(struct queue)*QUEUE_DEPTH, 0, SLAB_HWCACHE_ALIGN, NULL);
-
+	mutex_init(&read_mutex);
+	mutex_lock(&read_mutex);
 	pr_info("sbertask: module successfully loaded\n");
 	return 0;
 };
 
 static void __exit module_stop(void)
 {
+	struct queue *queue_entry;
 	unregister_chrdev(major_number, DEVICE_NAME);
-	kmem_cache_free(queue_cache ,&queue_head->list);
+	list_for_each_entry(queue_entry, &queue_head->list, list)
+        	kmem_cache_free(queue_cache, queue_entry);
 	kmem_cache_destroy(queue_cache);
 	pr_info("sbertask: module unloaded\n");
 };
