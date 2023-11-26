@@ -73,7 +73,7 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	{
 		pr_info("sbertask: queue is empty\n");
 		mutex_lock(&read_mutex);
-		mutex_lock(&read_mutex);
+		mutex_lock_interruptible(&read_mutex);
 		return 0;
 	}
 	if(put_user(queue_head->data, buf))
