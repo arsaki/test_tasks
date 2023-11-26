@@ -7,7 +7,7 @@ then
 	exit 1
 fi
 
-echo -n "Loading driver.....				"
+echo -n "Loading driver.....			"
 insmod sbertask.ko
 if [ $?  = 0 ]
 then
@@ -29,7 +29,7 @@ else
 fi
 
 echo -n "Creating char device /dev/sbertask..... "
-mknod /dev/sbertask c $MAJOR_NUM 0
+mknod -m=666 /dev/sbertask c $MAJOR_NUM 0
 if [ -c /dev/sbertask ]
 then
 	echo "Successful."
