@@ -74,7 +74,7 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 		pr_info("sbertask: queue is empty\n");
 		mutex_lock(&read_mutex);
 		mutex_lock_interruptible(&read_mutex);
-		return 0;
+		//return 0;
 	}
 	if(put_user(queue_head->data, buf))
 	{
@@ -112,6 +112,7 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 		queue_head = kmem_cache_alloc(queue_cache, GFP_KERNEL);
 		INIT_LIST_HEAD(&queue_head->list);
 		queue_tail = queue_head;	
+		mutex_unlock(&read_mutex);
 	}
 	else
 	{
@@ -122,7 +123,6 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 			return -EINVAL;
 		}
 		list_add_tail(&queue_tail->list, &queue_head->list);
-		mutex_unlock(&read_mutex);
 	};
 	if (get_user (queue_tail->data, buf))
 	{
