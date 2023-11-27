@@ -31,6 +31,7 @@
 #include <linux/slab_def.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
+#include <linux/spinlock.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Arsenii Akimov <arseniumfrela@bk.ru>");
@@ -55,7 +56,7 @@ struct queue {
 struct queue *queue_head;
 struct queue *queue_tail;
 DEFINE_MUTEX(read_mutex);
-
+DEFINE_SPINLOCK(read_lock);
 
 static int sbertask_open (struct inode *inode, struct file *file_p)
 {
@@ -72,7 +73,7 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	if(!queue_length)
 	{
 		pr_info("sbertask: queue is empty\n");
-		mutex_lock(&read_mutex);
+		mutex_lock_interruptible(&read_mutex);
 		mutex_lock_interruptible(&read_mutex);
 		//return 0;
 	}
@@ -162,7 +163,7 @@ static int __init module_start(void)
 	pr_info("sbertask: assigned major number %d\n", major_number);
 	queue_cache = kmem_cache_create("sbertask_queue", sizeof(struct queue)*QUEUE_DEPTH, 0, SLAB_HWCACHE_ALIGN, NULL);
 	mutex_init(&read_mutex);
-	mutex_lock(&read_mutex);
+	mutex_lock_interruptible(&read_mutex);
 	pr_info("sbertask: module successfully loaded\n");
 	return 0;
 };
