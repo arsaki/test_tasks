@@ -56,7 +56,7 @@ struct queue {
 struct queue *queue_head;
 struct queue *queue_tail;
 DEFINE_MUTEX(read_mutex);
-DEFINE_SPINLOCK(read_lock);
+DEFINE_SPINLOCK(queue_lock);
 
 static int sbertask_open (struct inode *inode, struct file *file_p)
 {
@@ -70,67 +70,64 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	struct queue *tmp_queue;
 	pr_info("sbertask: read\n");
 
-	if(!queue_length)
-	{
+	if(!queue_length){
 		pr_info("sbertask: queue is empty\n");
-		mutex_lock_interruptible(&read_mutex);
-		mutex_lock_interruptible(&read_mutex);
-		//return 0;
+		if (!mutex_lock_interruptible(&read_mutex))
+			if(mutex_lock_interruptible(&read_mutex)==-EINTR);
+				pr_info("Interrupt signal caught");
 	}
-	if(put_user(queue_head->data, buf))
-	{
+	spin_lock(&queue_lock);
+	if(put_user(queue_head->data, buf)){
 		pr_err("sbertask: can't put data to userspace!\n");
 		return -EINVAL;
 	}
 	pr_info("sbertask: sended char %c\n", queue_head->data);
 
-	if(queue_length > 1)
-	{
+	if(queue_length > 1){
 		tmp_queue = queue_head;
 		queue_head = list_entry(queue_head->list.next, struct queue, list);
 		list_del(&tmp_queue->list);
 		kmem_cache_free(queue_cache, tmp_queue);
 	}	
-	if(queue_length == 1)
-	{
+	if(queue_length == 1){
+		queue_head = NULL;
+		queue_tail = NULL;
 		kmem_cache_free(queue_cache, queue_head);
+
 	}
 	queue_length--;
+	spin_unlock(&queue_lock);
 	return 1;
 };
 
 static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size_t length, loff_t *off_p)
 {
 	pr_info("sbertask: write\n");
-	if (queue_length >= QUEUE_DEPTH)
-	{	
+	if (queue_length >= QUEUE_DEPTH){	
 		pr_info("sbertask: queue full");
 		return 0;
 	}
-	if (queue_length == 0)
-	{
+	spin_lock(&queue_lock);
+	if (queue_length == 0){
 		pr_info("sbertask: making new queue list");
 		queue_head = kmem_cache_alloc(queue_cache, GFP_KERNEL);
 		INIT_LIST_HEAD(&queue_head->list);
 		queue_tail = queue_head;	
 		mutex_unlock(&read_mutex);
-	}
-	else
-	{
+	} else {
 		queue_tail = kmem_cache_alloc(queue_cache, GFP_KERNEL);
-		if (queue_tail == NULL)
-		{
+		if (queue_tail == NULL)	{
 			pr_err("sbertask: can't allocate queue element!\n");
 			return -EINVAL;
 		}
 		list_add_tail(&queue_tail->list, &queue_head->list);
 	};
-	if (get_user (queue_tail->data, buf))
-	{
+	if (get_user (queue_tail->data, buf)){
 		pr_err("sbertask: can't get data from userspace\n");
 		return -EINVAL;
 	}
 	queue_length++;
+	spin_unlock(&queue_lock);
 	pr_info("sbertask: getted '%c'", queue_tail->data);
 	return 1;
 };
@@ -158,22 +155,34 @@ static int __init module_start(void)
 	major_number = register_chrdev(0, DEVICE_NAME, &f_ops);
 	if (major_number < 0){
 		pr_err("Can't register device %s", DEVICE_NAME);
-		return 1;
+		return 2;
 	}
 	pr_info("sbertask: assigned major number %d\n", major_number);
 	queue_cache = kmem_cache_create("sbertask_queue", sizeof(struct queue)*QUEUE_DEPTH, 0, SLAB_HWCACHE_ALIGN, NULL);
+	if (queue_cache == NULL){
+		pr_err("sbertask: can't create queue cache\n");
+	        unregister_chrdev(major_number, DEVICE_NAME);
+		return 3;
+	}
 	mutex_init(&read_mutex);
-	mutex_lock_interruptible(&read_mutex);
-	pr_info("sbertask: module successfully loaded\n");
-	return 0;
+	if (mutex_lock_interruptible(&read_mutex) == 0){
+		pr_info("sbertask: module successfully loaded\n");
+		return 0;
+	} else{
+		unregister_chrdev(major_number, DEVICE_NAME);
+		kmem_cache_destroy(queue_cache);
+		return 1;
+	}
 };
 
 static void __exit module_stop(void)
 {
-	struct queue *queue_entry;
+	struct queue *queue_entry, *queue_next;
+
 	unregister_chrdev(major_number, DEVICE_NAME);
-	list_for_each_entry(queue_entry, &queue_head->list, list)
-        	kmem_cache_free(queue_cache, queue_entry);
+	if (queue_head != NULL)
+		list_for_each_entry_safe(queue_entry, queue_next, &queue_head->list, list)
+        		kmem_cache_free(queue_cache, queue_entry);
 	kmem_cache_destroy(queue_cache);
 	pr_info("sbertask: module unloaded\n");
 };
