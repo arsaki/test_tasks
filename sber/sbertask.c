@@ -48,15 +48,20 @@ MODULE_PARM_DESC(mode_string, "Select  mode: default/single/multiple");
 
 static int major_number;
 static struct kmem_cache *queue_cache;
-static int queue_length;
 
-struct queue {
+struct queue_element {
 	struct list_head list;
 	char data;
 };
 
-struct queue *queue_head = NULL;
-struct queue *queue_tail = NULL;
+struct queue_descriptor {
+	struct queue *queue_head;
+	struct queue *queue_tail;
+	int queue_length;
+	pid_t pid;
+}
+
+
 DEFINE_MUTEX(read_mutex);
 DEFINE_SPINLOCK(queue_lock);
 DEFINE_SPINLOCK(rb_tree_lock);
@@ -75,7 +80,7 @@ static int rm_pid(pid_t pid){
 	return 0;
 }
 
-static void *get_queue_from_pid(pid_t pid){
+static queue_descriptor = get_queue_from_pid(pid_t pid){
 	spin_lock(&rb_tree_lock);
 
 	spin_unlock(&rb_tree_lock);
@@ -91,7 +96,7 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 	if (add_pid(current->pid))
 		pr_info("sbertask: process with pid %u opened device\n");
 	/* Cache create */
-	queue_cache = kmem_cache_create("sbertask_queue", sizeof(struct queue), 0, SLAB_HWCACHE_ALIGN, NULL);
+	queue_cache = kmem_cache_create("sbertask_queue", sizeof(struct queue_element), 0, SLAB_HWCACHE_ALIGN, NULL);
 	if (queue_cache == NULL){
 		pr_err("sbertask: can't create queue cache\n");
 	}
@@ -105,7 +110,7 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 
 static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t length, loff_t *off_p)
 {		
-	struct queue *old_entry, *queue_head;
+	struct queue_element *old_entry, *queue_head;
 
 	pr_info("sbertask: process with pid %u read device\n", current->pid);	
 	queue_head = get_queue_from_pid(current->pid);                
@@ -123,7 +128,7 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	/* time to delete entry */
 	if(queue_head->next != queue_head){
 		old_entry = queue_head;
-		queue_head = list_entry(queue_head->list.next, struct queue, list);
+		queue_head = list_entry(queue_head->list.next, struct queue_element, list);
 		list_del(&old_entry->list);
 		kmem_cache_free(queue_cache, old_entry);
 	else
@@ -209,7 +214,7 @@ static int __init module_start(void)
 
 static void __exit module_stop(void)
 {
-	struct queue *queue_entry, *queue_next;
+	struct queue_element *queue_entry, *queue_next;
 	int i;
 	unregister_chrdev(major_number, DEVICE_NAME);
 	if (queue_head != NULL)
