@@ -19,6 +19,9 @@
  * 	Driver has error(like overflow) and diagnostic messages
  * 	Linux API compatible
  *
+ *	All buffer placed in red black tree.
+ *	One buffer consists of list_head elements.
+ *
  */
 
 #include <linux/init.h> 
@@ -49,38 +52,71 @@ MODULE_PARM_DESC(mode_string, "Select  mode: default/single/multiple");
 static int major_number;
 static struct kmem_cache *queue_cache;
 
+/* Each queue consists of queue_element */
+
 struct queue_element {
 	struct list_head list;
 	char data;
 };
 
-struct queue_descriptor {
-	struct queue *queue_head;
-	struct queue *queue_tail;
+/* Each fifo buffer placed in red black tree. Pid is a key. */
+
+struct rb_buf_node {
+	struct rb_node node;
+	struct queue_element *queue_head;
+	struct queue_element *queue_tail;
 	int queue_length;
 	pid_t pid;
-}
+};
 
+
+static struct rb_root root = RB_ROOT;
 
 DEFINE_MUTEX(read_mutex);
 DEFINE_SPINLOCK(queue_lock);
 DEFINE_SPINLOCK(rb_tree_lock);
 
-static int add_pid(pid_t pid){
+static int add_queue(pid_t pid)
+{
+	
+	struct rb_buf_node *new_rb_buf_node;
+	struct rb_node **select_node = &(root.rb_node); 
+        struct rb_node *parent = NULL;
+
+	spin_lock(&rb_tree_lock);
+
+	/* Sliding on tree */
+	while (*select_node) {
+		struct rb_buf_node *selected_buf_node;
+	        selected_buf_node = container_of(*select_node, struct rb_buf_node, node);
+		if (pid < selected_buf_node->pid)
+			select_node = &((*select_node)->rb_left);
+	      	else if (pid > selected_buf_node->pid)
+		      	select_node = &((*select_node)->rb_right);
+	      	else
+		      	return 1;
+	}
+
+	/* Add new node and rebalance tree. */
+	new_rb_buf_node = kmalloc(sizeof(struct rb_buf_node), GFP_ATOMIC);
+	rb_link_node(&new_rb_buf_node->node, parent, select_node);
+	rb_insert_color(&new_rb_buf_node->node, &root);
+
+	spin_unlock(&rb_tree_lock);
+
+	return 0;
+}
+
+static int rm_queue(pid_t pid)
+{
 	spin_lock(&rb_tree_lock);
 
 	spin_unlock(&rb_tree_lock);
 	return 0;
 }
 
-static int rm_pid(pid_t pid){
-	spin_lock(&rb_tree_lock);
-
-	spin_unlock(&rb_tree_lock);
-	return 0;
-}
-
-static queue_descriptor = get_queue_from_pid(pid_t pid){
+static struct rb_buf_node *get_queue(pid_t pid)
+{
 	spin_lock(&rb_tree_lock);
 
 	spin_unlock(&rb_tree_lock);
@@ -91,10 +127,9 @@ static queue_descriptor = get_queue_from_pid(pid_t pid){
 
 static int sbertask_open (struct inode *inode, struct file *file_p)
 {
-
 	try_module_get(THIS_MODULE);
-	if (add_pid(current->pid))
-		pr_info("sbertask: process with pid %u opened device\n");
+	if (add_queue(current->pid))
+		pr_info("sbertask: process with pid %u opened device\n", (unsigned int)current->pid);
 	/* Cache create */
 	queue_cache = kmem_cache_create("sbertask_queue", sizeof(struct queue_element), 0, SLAB_HWCACHE_ALIGN, NULL);
 	if (queue_cache == NULL){
@@ -110,11 +145,14 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 
 static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t length, loff_t *off_p)
 {		
-	struct queue_element *old_entry, *queue_head;
-
+	struct rb_buf_node *tmp_buf_node;
+	struct queue_element *queue_head, *queue_tail, *queue_prev;
 	pr_info("sbertask: process with pid %u read device\n", current->pid);	
-	queue_head = get_queue_from_pid(current->pid);                
-	if(queue_head == NULL){
+	tmp_buf_node = get_queue(current->pid);  
+	queue_head = tmp_buf_node->queue_head;	
+	queue_tail = tmp_buf_node->queue_tail;	
+
+	if(!queue_head){
 		pr_info("sbertask: queue is empty for process with pid %u\n", current->pid);
 		/* lock reading with rw semaphore */
 	}
@@ -126,27 +164,34 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	}
 	pr_info("sbertask: sended char %c\n", queue_head->data);
 	/* time to delete entry */
-	if(queue_head->next != queue_head){
-		old_entry = queue_head;
+	if(queue_head->list.next != &queue_head->list){
+		queue_prev = queue_head;
 		queue_head = list_entry(queue_head->list.next, struct queue_element, list);
-		list_del(&old_entry->list);
-		kmem_cache_free(queue_cache, old_entry);
-	else
+		list_del(&queue_prev->list);
+		kmem_cache_free(queue_cache, queue_prev);
+	} else
 		kmem_cache_free(queue_cache, queue_head);
-		/* qet queue_head in rb_tree to null */
-	}
 	spin_unlock(&queue_lock);
 	return 1;
 };
 
 static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size_t length, loff_t *off_p)
 {
+	struct rb_buf_node * tmp_buf_node;
+	struct queue_element *queue_head, *queue_tail;
+	int queue_length;
+	tmp_buf_node = get_queue(current->pid);
+	queue_head = tmp_buf_node->queue_head;
+	queue_tail = tmp_buf_node->queue_tail;
+	queue_length = tmp_buf_node->queue_length;
+
 	pr_info("sbertask: process with pid %u write device\n", current->pid);	
 	if (queue_length >= QUEUE_DEPTH){	
 		pr_info("sbertask: queue full");
 		return 0;
 	}
 	spin_lock(&queue_lock);
+
 	if (queue_length == 0){
 		pr_info("sbertask: making new queue list");
 		queue_head = kmem_cache_alloc(queue_cache, GFP_KERNEL);
@@ -175,8 +220,8 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 static int sbertask_release (struct inode *inode, struct file *file_p)
 {
 	module_put(THIS_MODULE);
-        if (rm_pid(current->pid))
-                pr_info("sbertask: process with pid %u closed device\n");
+        if (rm_queue(current->pid))
+                pr_info("sbertask: process with pid %u closed device\n", current->pid);
 	mutex_unlock(&read_mutex);
 	pr_info("sbertask: device %s closed\n", DEVICE_NAME);
 	return 0;
@@ -192,7 +237,6 @@ const struct file_operations f_ops = {
 
 static int __init module_start(void)
 {
-	struct rb_root root = RB_ROOT;
 
 	pr_info("sbertask: mode %s\n", mode_string);
 	
@@ -214,15 +258,17 @@ static int __init module_start(void)
 
 static void __exit module_stop(void)
 {
-	struct queue_element *queue_entry, *queue_next;
-	int i;
+//	struct queue_element *queue_entry, *queue_next;
+//	int i;
 	unregister_chrdev(major_number, DEVICE_NAME);
-	if (queue_head != NULL)
+/*
+ * if (queue_head != NULL)
 		list_for_each_entry_safe(queue_entry, queue_next, &queue_head->list, list){
         		kmem_cache_free(queue_cache, queue_entry);
 			pr_info("sbertask: queue counter cache free %i", i);
 		}
 	kmem_cache_destroy(queue_cache);
+*/
 	pr_info("sbertask: module unloaded\n");
 };
 
