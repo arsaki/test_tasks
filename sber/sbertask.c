@@ -76,12 +76,14 @@ DEFINE_MUTEX(read_mutex);
 DEFINE_SPINLOCK(queue_lock);
 DEFINE_SPINLOCK(rb_tree_lock);
 
-static int add_queue(pid_t pid)
+static int add_buffer(pid_t pid)
 {
 	
 	struct rb_buf_node *new_rb_buf_node;
 	struct rb_node **select_node = &(root.rb_node); 
         struct rb_node *parent = NULL;
+
+	new_rb_buf_node = kmalloc(sizeof(struct rb_buf_node), GFP_KERNEL);
 
 	spin_lock(&rb_tree_lock);
 
@@ -93,12 +95,13 @@ static int add_queue(pid_t pid)
 			select_node = &((*select_node)->rb_left);
 	      	else if (pid > selected_buf_node->pid)
 		      	select_node = &((*select_node)->rb_right);
-	      	else
+	      	else{
+			kfree(new_rb_buf_node);
 		      	return 1;
+		}
 	}
 
 	/* Add new node and rebalance tree. */
-	new_rb_buf_node = kmalloc(sizeof(struct rb_buf_node), GFP_ATOMIC);
 	rb_link_node(&new_rb_buf_node->node, parent, select_node);
 	rb_insert_color(&new_rb_buf_node->node, &root);
 
@@ -107,28 +110,55 @@ static int add_queue(pid_t pid)
 	return 0;
 }
 
-static int rm_queue(pid_t pid)
+static struct rb_buf_node *get_buffer(pid_t pid)
 {
+	struct rb_node **select_node = &(root.rb_node); 
+	struct rb_buf_node * selected_buf_node = container_of(*select_node, struct rb_buf_node, node);
+
 	spin_lock(&rb_tree_lock);
+
+	while (selected_buf_node->pid) {
+                struct rb_buf_node *selected_buf_node;
+                selected_buf_node = container_of(*select_node, struct rb_buf_node, node);
+                if (pid < selected_buf_node->pid)
+                        select_node = &((*select_node)->rb_left);
+                else if (pid > selected_buf_node->pid)
+                        select_node = &((*select_node)->rb_right);
+        
+	}
+
+	spin_unlock(&rb_tree_lock);
+	return NULL;
+}
+
+static int rm_buffer(pid_t pid)
+{
+	struct rb_buf_node *rm_buf;
+        struct queue_element *queue_entry, *queue_next;
+      	int i;
+
+	spin_lock(&rb_tree_lock);
+
+	rm_buf = get_buffer(pid);
+ 	if (rm_buf->queue_head != NULL)
+                list_for_each_entry_safe(queue_entry, queue_next, &rm_buf->queue_head->list, list){
+                        kmem_cache_free(queue_cache, queue_entry);
+                        pr_info("sbertask: pid %u, queue counter cache free %i", current->pid, i);
+                }
+	rb_erase(&rm_buf->node, &root);
+	kfree(&rm_buf);
 
 	spin_unlock(&rb_tree_lock);
 	return 0;
 }
 
-static struct rb_buf_node *get_queue(pid_t pid)
-{
-	spin_lock(&rb_tree_lock);
-
-	spin_unlock(&rb_tree_lock);
-	return NULL;
-}
 
 
 
 static int sbertask_open (struct inode *inode, struct file *file_p)
 {
 	try_module_get(THIS_MODULE);
-	if (add_queue(current->pid))
+	if (add_buffer(current->pid))
 		pr_info("sbertask: process with pid %u opened device\n", (unsigned int)current->pid);
 	/* Cache create */
 	queue_cache = kmem_cache_create("sbertask_queue", sizeof(struct queue_element), 0, SLAB_HWCACHE_ALIGN, NULL);
@@ -148,7 +178,7 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	struct rb_buf_node *tmp_buf_node;
 	struct queue_element *queue_head, *queue_tail, *queue_prev;
 	pr_info("sbertask: process with pid %u read device\n", current->pid);	
-	tmp_buf_node = get_queue(current->pid);  
+	tmp_buf_node = get_buffer(current->pid);  
 	queue_head = tmp_buf_node->queue_head;	
 	queue_tail = tmp_buf_node->queue_tail;	
 
@@ -180,7 +210,7 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	struct rb_buf_node * tmp_buf_node;
 	struct queue_element *queue_head, *queue_tail;
 	int queue_length;
-	tmp_buf_node = get_queue(current->pid);
+	tmp_buf_node = get_buffer(current->pid);
 	queue_head = tmp_buf_node->queue_head;
 	queue_tail = tmp_buf_node->queue_tail;
 	queue_length = tmp_buf_node->queue_length;
@@ -220,7 +250,7 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 static int sbertask_release (struct inode *inode, struct file *file_p)
 {
 	module_put(THIS_MODULE);
-        if (rm_queue(current->pid))
+        if (rm_buffer(current->pid))
                 pr_info("sbertask: process with pid %u closed device\n", current->pid);
 	mutex_unlock(&read_mutex);
 	pr_info("sbertask: device %s closed\n", DEVICE_NAME);
