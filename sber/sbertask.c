@@ -33,7 +33,6 @@
 #include <linux/slab.h>
 #include <linux/slab_def.h>
 #include <linux/list.h>
-#include <linux/mutex.h>
 #include <linux/spinlock.h>
 #include <linux/sched.h>
 #include <linux/rbtree.h>
@@ -71,37 +70,41 @@ struct rb_buf_node {
 
 static struct rb_root root = RB_ROOT;
 
-DEFINE_MUTEX(read_mutex);
 DEFINE_SPINLOCK(queue_lock);
 DEFINE_SPINLOCK(rb_tree_lock);
 
 static int add_buffer(pid_t pid)
 {
-	struct rb_buf_node *new_rb_buf_node;
-	struct rb_node **select_node = &(root.rb_node); 
+	struct rb_buf_node *new_buffer;
+	struct rb_node **node = &(root.rb_node); 
         struct rb_node *parent = NULL;
-
-	new_rb_buf_node = kmalloc(sizeof(struct rb_buf_node), GFP_KERNEL);
+	pr_info("add buffer started\n");
+	new_buffer = kmalloc(sizeof(struct rb_buf_node), GFP_KERNEL);
 
 	spin_lock(&rb_tree_lock);
 
 	/* Sliding on tree */
-	while (*select_node) {
-		struct rb_buf_node *selected_buf_node;
-	        selected_buf_node = container_of(*select_node, struct rb_buf_node, node);
-		if (pid < selected_buf_node->pid)
-			select_node = &((*select_node)->rb_left);
-	      	else if (pid > selected_buf_node->pid)
-		      	select_node = &((*select_node)->rb_right);
+	pr_info("before while\n");
+	while (*node) {
+		struct rb_buf_node *selected_buffer;
+		pr_info("Before container_of\n");
+	        selected_buffer = container_of(*node, struct rb_buf_node, node);
+		if (pid < selected_buffer->pid)
+			node = &((*node)->rb_left);
+	      	else if (pid > selected_buffer->pid)
+		      	node = &((*node)->rb_right);
 	      	else{
-			kfree(new_rb_buf_node);
+			pr_info("kfree_buffer\n");
+			kfree(new_buffer);
 		      	return 1;
 		}
 	}
 
 	/* Add new node and rebalance tree. */
-	rb_link_node(&new_rb_buf_node->node, parent, select_node);
-	rb_insert_color(&new_rb_buf_node->node, &root);
+	pr_info("1\n");
+	rb_link_node(&new_buffer->node, parent, node);
+	pr_info("2\n");
+	rb_insert_color(&new_buffer->node, &root);
 
 	spin_unlock(&rb_tree_lock);
 
@@ -159,11 +162,18 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 	/* Buffer create */
 	if (!add_buffer(current->pid))
 		pr_info("sbertask: process with pid %u opened device\n", current->pid);
-
-	/* Mutex */
-	mutex_init(&read_mutex);
-	if (!mutex_lock_interruptible(&read_mutex))
 	pr_info("sbertask: device %s opened\n", DEVICE_NAME);
+	return 0;
+};
+
+static int sbertask_release (struct inode *inode, struct file *file_p)
+{
+	module_put(THIS_MODULE);
+	/* Buffer delete */
+	pr_info("rm_buffer\n");
+        if (rm_buffer(current->pid))
+                pr_info("sbertask: process with pid %u closed device\n", current->pid);
+	pr_info("sbertask: device %s closed\n", DEVICE_NAME);
 	return 0;
 };
 
@@ -205,6 +215,7 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	struct queue_element *queue_head, *queue_tail;
 	int queue_length;
 	tmp_buf_node = get_buffer(current->pid);
+	if (tmp_buf_node == NULL)
 	queue_head = tmp_buf_node->queue_head;
 	queue_tail = tmp_buf_node->queue_tail;
 	queue_length = tmp_buf_node->queue_length;
@@ -214,6 +225,7 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 		pr_info("sbertask: queue full");
 		return 0;
 	}
+	
 	spin_lock(&queue_lock);
 
 	if (queue_length == 0){
@@ -233,30 +245,22 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 		pr_err("sbertask: can't get data from userspace\n");
 		return -EINVAL;
 	}
-	mutex_unlock(&read_mutex);
 	queue_length++;
+	
 	spin_unlock(&queue_lock);
+
 	pr_info("sbertask: getted '%c'", queue_tail->data);
 	return 1;
 };
 
 
-static int sbertask_release (struct inode *inode, struct file *file_p)
-{
-	module_put(THIS_MODULE);
-        if (rm_buffer(current->pid))
-                pr_info("sbertask: process with pid %u closed device\n", current->pid);
-	mutex_unlock(&read_mutex);
-	pr_info("sbertask: device %s closed\n", DEVICE_NAME);
-	return 0;
-};
 
 const struct file_operations f_ops = {
-	.owner = THIS_MODULE,
-	.open  = sbertask_open,
-	.read  = sbertask_read,
-	.write = sbertask_write,
+	.owner   = THIS_MODULE,
+	.open    = sbertask_open,
 	.release = sbertask_release,
+	.read    = sbertask_read,
+	.write   = sbertask_write,
 };
 
 static int __init module_start(void)
