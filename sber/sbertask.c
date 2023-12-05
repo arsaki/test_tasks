@@ -76,35 +76,57 @@ DEFINE_SPINLOCK(rb_tree_lock);
 static int add_buffer(pid_t pid)
 {
 	struct rb_buf_node *new_buffer;
+	struct rb_buf_node *buffer_select;
 	struct rb_node **node = &(root.rb_node); 
         struct rb_node *parent = NULL;
-	pr_info("add buffer started\n");
+	int delete_buffer = 1;
+	pr_info("add_buffer started\n");
 	new_buffer = kmalloc(sizeof(struct rb_buf_node), GFP_KERNEL);
-
+	if (new_buffer == NULL){
+		pr_err("sbertask: can`t allocate memory for buffer!!!\n");
+		return 1;
+	}
 	spin_lock(&rb_tree_lock);
 
-	/* Sliding on tree */
-	pr_info("before while\n");
-	while (*node) {
-		struct rb_buf_node *selected_buffer;
-		pr_info("Before container_of\n");
-	        selected_buffer = container_of(*node, struct rb_buf_node, node);
-		if (pid < selected_buffer->pid)
-			node = &((*node)->rb_left);
-	      	else if (pid > selected_buffer->pid)
-		      	node = &((*node)->rb_right);
-	      	else{
-			pr_info("kfree_buffer\n");
-			kfree(new_buffer);
-		      	return 1;
-		}
+	/* If empty tree */
+	if (*node == NULL) {
+		pr_info(" sbertask: creating first buffer...\n");
+		new_buffer->pid = pid;
+		new_buffer->queue_head = NULL;
+		new_buffer->queue_tail = NULL;
+		new_buffer->queue_length = 0;
+		root.rb_node = &(new_buffer->node);
+		root.rb_node->rb_right = NULL;
+		root.rb_node->rb_left = NULL;
+		delete_buffer = 0;
 	}
-
+	/* Sliding on tree */
+	while (*node) {
+		pr_info("Before container_of\n");
+	        buffer_select = container_of(*node, struct rb_buf_node, node);
+		parent = *node;
+		if (pid < buffer_select->pid)
+			node = &((*node)->rb_left);
+	      	else if (pid > buffer_select->pid)
+		      	node = &((*node)->rb_right);
+		else if (pid == buffer_select->pid){
+			pr_info("sbertask: buffer founded and already exist\n");
+			if (delete_buffer)
+				kfree(new_buffer);
+			goto exit;
+		}
+		
+	}
 	/* Add new node and rebalance tree. */
-	pr_info("1\n");
+	pr_info("rb_link_node\n");
 	rb_link_node(&new_buffer->node, parent, node);
-	pr_info("2\n");
+	pr_info("rb_insert_color\n");
 	rb_insert_color(&new_buffer->node, &root);
+	new_buffer->pid = pid;
+	new_buffer->queue_head = NULL;
+	new_buffer->queue_tail = NULL;
+	new_buffer->queue_length = 0;
+exit:	
 
 	spin_unlock(&rb_tree_lock);
 
@@ -113,42 +135,52 @@ static int add_buffer(pid_t pid)
 
 static struct rb_buf_node *get_buffer(pid_t pid)
 {
-	struct rb_node **select_node = &(root.rb_node); 
-	struct rb_buf_node * selected_buf_node = container_of(*select_node, struct rb_buf_node, node);
+	struct rb_node **node = &(root.rb_node); 
+	struct rb_buf_node * buffer_select;
 
 	spin_lock(&rb_tree_lock);
 
-	while (selected_buf_node->pid) {
-                struct rb_buf_node *selected_buf_node;
-                selected_buf_node = container_of(*select_node, struct rb_buf_node, node);
-                if (pid < selected_buf_node->pid)
-                        select_node = &((*select_node)->rb_left);
-                else if (pid > selected_buf_node->pid)
-                        select_node = &((*select_node)->rb_right);
-        
+	/* Sliding on tree */
+	while (*node) {
+		pr_info("sbertask: searching buffer...\n");
+	        buffer_select = container_of(*node, struct rb_buf_node, node);
+		if (pid < buffer_select->pid)
+			node = &((*node)->rb_left);
+	      	else if (pid > buffer_select->pid)
+		      	node = &((*node)->rb_right);
+		else if (pid == buffer_select->pid){
+			pr_info("sbertask: buffer founded!!!\n");
+
+			spin_unlock(&rb_tree_lock);
+
+			return buffer_select;
+		}
+		
 	}
 
 	spin_unlock(&rb_tree_lock);
+
+	pr_err("snertask: no buffer found by pid %u\n", current->pid);
 	return NULL;
 }
 
 static int rm_buffer(pid_t pid)
 {
-	struct rb_buf_node *rm_buf;
+	struct rb_buf_node *rm_buffer;
         struct queue_element *queue_entry, *queue_next;
       	int i;
 
+
+	pr_info("sbertask: rm_buffer executed\n");
+	rm_buffer = get_buffer(pid);
 	spin_lock(&rb_tree_lock);
-
-	rm_buf = get_buffer(pid);
- 	if (rm_buf->queue_head != NULL)
-                list_for_each_entry_safe(queue_entry, queue_next, &rm_buf->queue_head->list, list){
+ 	if (rm_buffer->queue_head != NULL)
+                list_for_each_entry_safe(queue_entry, queue_next, &rm_buffer->queue_head->list, list){
                         kmem_cache_free(queue_cache, queue_entry);
-                        pr_info("sbertask: pid %u, queue counter cache free %i", current->pid, i);
+                        pr_info("sbertask: pid %u, queue counter cache free %i\n", current->pid, i);
                 }
-	rb_erase(&rm_buf->node, &root);
-	kfree(&rm_buf);
-
+	rb_erase(&rm_buffer->node, &root);
+	kfree(rm_buffer);
 	spin_unlock(&rb_tree_lock);
 	return 0;
 }
@@ -159,19 +191,19 @@ static int rm_buffer(pid_t pid)
 static int sbertask_open (struct inode *inode, struct file *file_p)
 {
 	try_module_get(THIS_MODULE);
+	pr_info("sbertask: device %s opened\n", DEVICE_NAME);
 	/* Buffer create */
 	if (!add_buffer(current->pid))
-		pr_info("sbertask: process with pid %u opened device\n", current->pid);
-	pr_info("sbertask: device %s opened\n", DEVICE_NAME);
+		pr_info("sbertask: process with pid %u successfully opened device\n", current->pid);
 	return 0;
 };
 
 static int sbertask_release (struct inode *inode, struct file *file_p)
 {
 	module_put(THIS_MODULE);
+	pr_info("sbertask: release\n");
 	/* Buffer delete */
-	pr_info("rm_buffer\n");
-        if (rm_buffer(current->pid))
+        if (!rm_buffer(current->pid))
                 pr_info("sbertask: process with pid %u closed device\n", current->pid);
 	pr_info("sbertask: device %s closed\n", DEVICE_NAME);
 	return 0;
@@ -182,15 +214,19 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	struct rb_buf_node *tmp_buf_node;
 	struct queue_element *queue_head, *queue_tail, *queue_prev;
 	pr_info("sbertask: process with pid %u read device\n", current->pid);	
-	tmp_buf_node = get_buffer(current->pid);  
+	tmp_buf_node = get_buffer(current->pid);
+      	if (tmp_buf_node == NULL)
+		return -EINVAL;	
 	queue_head = tmp_buf_node->queue_head;	
 	queue_tail = tmp_buf_node->queue_tail;	
 
 	if(!queue_head){
 		pr_info("sbertask: queue is empty for process with pid %u\n", current->pid);
-		/* lock reading with rw semaphore */
+		return 0;
 	}
+
 	spin_lock(&queue_lock);
+	
 	if(put_user(queue_head->data, buf)){
 		spin_unlock(&queue_lock);
 		pr_err("sbertask: can't put data to userspace!\n");
@@ -205,7 +241,9 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 		kmem_cache_free(queue_cache, queue_prev);
 	} else
 		kmem_cache_free(queue_cache, queue_head);
+	
 	spin_unlock(&queue_lock);
+	
 	return 1;
 };
 
