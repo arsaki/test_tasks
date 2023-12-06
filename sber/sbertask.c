@@ -90,7 +90,7 @@ static int add_buffer(pid_t pid)
 
 	/* If empty tree */
 	if (*node == NULL) {
-		pr_info(" sbertask: creating first buffer...\n");
+		pr_info("sbertask: creating first rb tree node...\n");
 		new_buffer->pid = pid;
 		new_buffer->queue_head = NULL;
 		new_buffer->queue_tail = NULL;
@@ -102,7 +102,7 @@ static int add_buffer(pid_t pid)
 	}
 	/* Sliding on tree */
 	while (*node) {
-		pr_info("Before container_of\n");
+		pr_info("Begin slide on tree\n");
 	        buffer_select = container_of(*node, struct rb_buf_node, node);
 		parent = *node;
 		if (pid < buffer_select->pid)
@@ -122,12 +122,13 @@ static int add_buffer(pid_t pid)
 	rb_link_node(&new_buffer->node, parent, node);
 	pr_info("rb_insert_color\n");
 	rb_insert_color(&new_buffer->node, &root);
+	pr_info("filling new_buffer fields\n");
 	new_buffer->pid = pid;
 	new_buffer->queue_head = NULL;
 	new_buffer->queue_tail = NULL;
 	new_buffer->queue_length = 0;
 exit:	
-
+	pr_info("spin_unlock\n");
 	spin_unlock(&rb_tree_lock);
 
 	return 0;
@@ -203,7 +204,7 @@ static int sbertask_release (struct inode *inode, struct file *file_p)
 	module_put(THIS_MODULE);
 	pr_info("sbertask: release\n");
 	/* Buffer delete */
-        if (!rm_buffer(current->pid))
+//        if (!rm_buffer(current->pid))
                 pr_info("sbertask: process with pid %u closed device\n", current->pid);
 	pr_info("sbertask: device %s closed\n", DEVICE_NAME);
 	return 0;
@@ -251,44 +252,48 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 {
 	struct rb_buf_node * tmp_buf_node;
 	struct queue_element *queue_head, *queue_tail;
-	int queue_length;
+	long unsigned queue_length, c;
+	pr_info("sbertask: process with pid %u write device\n", current->pid);	
+	pr_info("length is %lu\n",length);
 	tmp_buf_node = get_buffer(current->pid);
 	if (tmp_buf_node == NULL)
 	queue_head = tmp_buf_node->queue_head;
 	queue_tail = tmp_buf_node->queue_tail;
 	queue_length = tmp_buf_node->queue_length;
 
-	pr_info("sbertask: process with pid %u write device\n", current->pid);	
 	if (queue_length >= QUEUE_DEPTH){	
-		pr_info("sbertask: queue full");
+		pr_info("sbertask: queue full\n");
 		return 0;
 	}
 	
 	spin_lock(&queue_lock);
 
 	if (queue_length == 0){
-		pr_info("sbertask: making new queue list");
+		pr_info("sbertask: making new queue list\n");
 		queue_head = kmem_cache_alloc(queue_cache, GFP_KERNEL);
 		INIT_LIST_HEAD(&queue_head->list);
 		queue_tail = queue_head;	
-	} else {
+	}
+	for (c = 0; c < length; c++, buf++){
 		queue_tail = kmem_cache_alloc(queue_cache, GFP_KERNEL);
 		if (queue_tail == NULL)	{
 			pr_err("sbertask: can't allocate queue element!\n");
 			return -EINVAL;
 		}
 		list_add_tail(&queue_tail->list, &queue_head->list);
-	};
-	if (get_user (queue_tail->data, buf)){
-		pr_err("sbertask: can't get data from userspace\n");
-		return -EINVAL;
+		if (get_user(queue_tail->data, buf)){
+			pr_err("sbertask: can't get data from userspace\n");
+			return -EINVAL;
+		}
+		queue_length++;
+		pr_info("sbertask: getted '%c'\n", queue_tail->data);
+		
 	}
-	queue_length++;
+	pr_info("c is %lu\n", c);
 	
 	spin_unlock(&queue_lock);
 
-	pr_info("sbertask: getted '%c'", queue_tail->data);
-	return 1;
+	return c;
 };
 
 
