@@ -102,7 +102,7 @@ static int add_buffer(pid_t pid)
 	}
 	/* Sliding on tree */
 	while (*node) {
-		pr_info("Begin slide on tree\n");
+		pr_info("begin slide on tree\n");
 	        buffer_select = container_of(*node, struct rb_buf_node, node);
 		parent = *node;
 		if (pid < buffer_select->pid)
@@ -121,7 +121,7 @@ static int add_buffer(pid_t pid)
 	pr_info("rb_link_node\n");
 	rb_link_node(&new_buffer->node, parent, node);
 	pr_info("rb_insert_color\n");
-	rb_insert_color(&new_buffer->node, &root);
+	rb_insert_color(*node, &root);
 	pr_info("filling new_buffer fields\n");
 	new_buffer->pid = pid;
 	new_buffer->queue_head = NULL;
@@ -245,7 +245,7 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	list_for_each(iterator, &queue_head->list){
 		if((c < queue_length) && (c < length)){
 			queue_tmp = list_entry(iterator, struct queue_element, list);
-			if(put_user(queue_tmp->data, buf +c)){
+			if(put_user(queue_tmp->data, buf+c )){
 				spin_unlock(&queue_lock);
 				pr_err("sbertask: can't put data to userspace!\n");
 				return -EINVAL;
@@ -257,7 +257,7 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 		} else
 			break;
 	}
-
+	pr_info("sbertask: exit sbertask_read\n");
 	tmp_buf_node->queue_head = queue_head;	
 	tmp_buf_node->queue_tail = queue_tail;	
 	tmp_buf_node->queue_length = --queue_length;
