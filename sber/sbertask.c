@@ -218,7 +218,8 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 {		
 	struct rb_buf_node *tmp_buf_node;
 	struct queue_element *queue_head, *queue_tail, *queue_tmp;
-	int queue_length;
+	int queue_length, c = 0;
+	struct list_head *iterator;
 	pr_info("sbertask: process with pid %u read device\n", current->pid);	
 	tmp_buf_node = get_buffer(current->pid);
       	if (tmp_buf_node == NULL)
@@ -240,26 +241,28 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 		return -EINVAL;
 	}
 	/* time to delete entry */
-	pr_info("sbertask: sended '%c', address queue_tail %p , queue_head %p, queue_length is %u\n", queue_head->data, queue_tail, queue_head, queue_length);
 
-	if(queue_length > 0){
-		pr_info("clearing list\n");;
-		queue_tmp = queue_head;
-		queue_head = list_entry(queue_head->list.next, struct queue_element, list);
-		list_del(&queue_tmp->list);
-		kmem_cache_free(queue_cache, queue_tmp);
-	} else{
-//		pr_info("deleting head\n");
-//		kmem_cache_free(queue_cache, queue_head);
+	list_for_each(iterator, &queue_head->list){
+		if((c < queue_length) && (c < length)){
+			queue_tmp = list_entry(iterator, struct queue_element, list);
+			if(put_user(queue_tmp->data, buf +c)){
+				spin_unlock(&queue_lock);
+				pr_err("sbertask: can't put data to userspace!\n");
+				return -EINVAL;
+        		}
+			pr_info("sbertask: sended '%c'\n", queue_tmp->data);
+	                list_del(&queue_tmp->list);
+	                kmem_cache_free(queue_cache, queue_tmp);
+			c++;
+		} else
+			break;
 	}
-	
+
 	tmp_buf_node->queue_head = queue_head;	
 	tmp_buf_node->queue_tail = queue_tail;	
 	tmp_buf_node->queue_length = --queue_length;
-
 	spin_unlock(&queue_lock);
-	
-	return 1;
+	return c;
 };
 
 static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size_t length, loff_t *off_p)
@@ -305,11 +308,11 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	pr_info("c is %lu\n", c);
 	
 	spin_unlock(&queue_lock);
-/*
+
 	tmp_buf_node->queue_head = queue_head;
         tmp_buf_node->queue_tail = queue_tail;
         tmp_buf_node->queue_length = queue_length;
-*/
+
 	
 
 	return c;
