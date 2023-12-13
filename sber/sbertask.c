@@ -252,8 +252,8 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 				return -EINVAL;
         		}
 			pr_info("sbertask: sended '%c'\n", queue_tmp->data);
-//	                list_del(&queue_tmp->list);
-//	                kmem_cache_free(queue_cache, queue_tmp);
+	                list_del(&queue_tmp->list);
+	                kmem_cache_free(queue_cache, queue_tmp);
 			pr_info("end of read iteration %d \n", c);
 			c++;
 		} else
