@@ -217,9 +217,9 @@ static int sbertask_release (struct inode *inode, struct file *file_p)
 static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t length, loff_t *off_p)
 {		
 	struct rb_buf_node *tmp_buf_node;
-	struct queue_element *queue_head, *queue_tail, *queue_tmp;
+	struct queue_element *queue_head, *queue_tail, *queue_tmp, *queue_iter, *queue_iter_next;
 	int queue_length, c = 0;
-	struct list_head *iterator;
+	struct list_head *iter, *iter_next;
 	pr_info("sbertask: process with pid %u read device\n", current->pid);	
 	tmp_buf_node = get_buffer(current->pid);
       	if (tmp_buf_node == NULL)
@@ -242,11 +242,11 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	}
 	/* time to delete entry */
 
-	list_for_each(iterator, &queue_head->list){
+	list_for_each_entry_safe(queue_iter, queue_iter_next, &queue_head->list, list){
 		if((c < queue_length) && (c < length)){
-			queue_tmp = list_entry(iterator, struct queue_element, list);
+			queue_tmp = queue_iter;
 			pr_info("begin of read iteration %d \n", c);
-			if(put_user(queue_tmp->data, buf )){
+			if(put_user(queue_tmp->data, buf+c)){
 				spin_unlock(&queue_lock);
 				pr_err("sbertask: can't put data to userspace!\n");
 				return -EINVAL;
