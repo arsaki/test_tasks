@@ -245,14 +245,16 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	list_for_each(iterator, &queue_head->list){
 		if((c < queue_length) && (c < length)){
 			queue_tmp = list_entry(iterator, struct queue_element, list);
-			if(put_user(queue_tmp->data, buf+c )){
+			pr_info("begin of read iteration %d \n", c);
+			if(put_user(queue_tmp->data, buf )){
 				spin_unlock(&queue_lock);
 				pr_err("sbertask: can't put data to userspace!\n");
 				return -EINVAL;
         		}
 			pr_info("sbertask: sended '%c'\n", queue_tmp->data);
-	                list_del(&queue_tmp->list);
-	                kmem_cache_free(queue_cache, queue_tmp);
+//	                list_del(&queue_tmp->list);
+//	                kmem_cache_free(queue_cache, queue_tmp);
+			pr_info("end of read iteration %d \n", c);
 			c++;
 		} else
 			break;
