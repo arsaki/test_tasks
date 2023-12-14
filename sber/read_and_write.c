@@ -8,7 +8,7 @@
 
 #define BUF_SIZE 1000
 void main (void){
-	const void *s = "1234567890\n";
+	const void *s = "1234567890";
 	void *d;
 	int fd;
 	int res;
