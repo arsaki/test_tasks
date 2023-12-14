@@ -18,6 +18,6 @@ void main (void){
 	d = malloc(BUF_SIZE);
 	res = read(fd, d, BUF_SIZE);
 	close(fd);
-//	printf("%s\n", d);
+	printf("%s\n", d);
 	free(d);
 }
