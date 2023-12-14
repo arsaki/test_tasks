@@ -14,7 +14,7 @@ void main (void){
 	int res;
 	fd = open("/dev/sbertask", O_CREAT | O_TRUNC | O_RDWR, 0666);
 	res = write(fd, s, strlen(s));
-//	lseek(fd,0,0);
+	lseek(fd,0,0);
 	d = malloc(BUF_SIZE);
 	res = read(fd, d, BUF_SIZE);
 	close(fd);

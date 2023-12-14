@@ -95,9 +95,9 @@ static int add_buffer(pid_t pid)
 		new_buffer->queue_head = NULL;
 		new_buffer->queue_tail = NULL;
 		new_buffer->queue_length = 0;
-		root.rb_node = &(new_buffer->node);
-		root.rb_node->rb_right = NULL;
-		root.rb_node->rb_left = NULL;
+//		root.rb_node = &(new_buffer->node);
+//		root.rb_node->rb_right = NULL;
+//		root.rb_node->rb_left = NULL;
 		delete_buffer = 0;
 	}
 	/* Sliding on tree */
@@ -121,7 +121,7 @@ static int add_buffer(pid_t pid)
 	pr_info("rb_link_node\n");
 	rb_link_node(&new_buffer->node, parent, node);
 	pr_info("rb_insert_color\n");
-	rb_insert_color(*node, &root);
+	rb_insert_color(&new_buffer->node, &root);
 	pr_info("filling new_buffer fields\n");
 	new_buffer->pid = pid;
 	new_buffer->queue_head = NULL;
@@ -219,7 +219,6 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	struct rb_buf_node *tmp_buf_node;
 	struct queue_element *queue_head, *queue_tail, *queue_tmp, *queue_iter, *queue_iter_next;
 	int queue_length, c = 0;
-	struct list_head *iter, *iter_next;
 	pr_info("sbertask: process with pid %u read device\n", current->pid);	
 	tmp_buf_node = get_buffer(current->pid);
       	if (tmp_buf_node == NULL)
@@ -245,7 +244,6 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	list_for_each_entry_safe(queue_iter, queue_iter_next, &queue_head->list, list){
 		if((c < queue_length) && (c < length)){
 			queue_tmp = queue_iter;
-			pr_info("begin of read iteration %d \n", c);
 			if(put_user(queue_tmp->data, buf+c)){
 				spin_unlock(&queue_lock);
 				pr_err("sbertask: can't put data to userspace!\n");
@@ -254,7 +252,6 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 			pr_info("sbertask: sended '%c'\n", queue_tmp->data);
 	                list_del(&queue_tmp->list);
 	                kmem_cache_free(queue_cache, queue_tmp);
-			pr_info("end of read iteration %d \n", c);
 			c++;
 		} else
 			break;
