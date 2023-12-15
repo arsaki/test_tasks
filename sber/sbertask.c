@@ -78,7 +78,6 @@ static int add_buffer(pid_t pid)
 
 	spin_lock(&rb_tree_lock);
 
-	pr_info("add_buffer start");
 	/* Sliding on r.b. tree */
 	while (*node) {
 	        buffer = container_of(*node, struct rb_buf_node, node);
@@ -103,7 +102,6 @@ static int add_buffer(pid_t pid)
 	new_buffer->buffer_tail = NULL;
 	new_buffer->buffer_length = 0;
 exit:	
-	pr_info("add_buffer stopped");
 	spin_unlock(&rb_tree_lock);
 
 	return 0;
@@ -112,24 +110,22 @@ exit:
 static struct rb_buf_node *get_buffer(pid_t pid)
 {
 	struct rb_node **node = &(root.rb_node); 
-	struct rb_buf_node * buffer_select;
-
-	spin_lock(&rb_tree_lock);
+	struct rb_buf_node * buffer;
 
 	/* Sliding on tree */
 	while (*node) {
-	        buffer_select = container_of(*node, struct rb_buf_node, node);
-		if (pid < buffer_select->pid)
+	        buffer = container_of(*node, struct rb_buf_node, node);
+		if (pid < buffer->pid)
 			node = &((*node)->rb_left);
-	      	else if (pid > buffer_select->pid)
+	      	else if (pid > buffer->pid)
 		      	node = &((*node)->rb_right);
-		else if (pid == buffer_select->pid){
+		else if (pid == buffer->pid){
+
 			spin_unlock(&rb_tree_lock);
-			return buffer_select;
+			
+			return buffer;
 		}
 	}
-
-	spin_unlock(&rb_tree_lock);
 
 	pr_err("sbertask: get_buffer(): no buffer found by pid %u\n", current->pid);
 	return NULL;
@@ -138,18 +134,25 @@ static struct rb_buf_node *get_buffer(pid_t pid)
 static int rm_buffer(pid_t pid)
 {
 	struct rb_buf_node *rm_buffer;
-        struct buffer_element *queue_entry, *queue_next;
+        struct buffer_element *buffer_entry, *buffer_next;
+
+	spin_lock(&rb_tree_lock);
 
 	rm_buffer = get_buffer(pid);
-	spin_lock(&rb_tree_lock);
+	if (rm_buffer == NULL){
+		pr_err("sbertask: rm_buffer: buffer for pid %u not found\n", pid);
+		goto exit;
+	}
  	if (rm_buffer->buffer_head != NULL){
-                list_for_each_entry_safe(queue_entry, queue_next, &rm_buffer->buffer_head->list, list){
-                        kmem_cache_free(buffer_cache, queue_entry);
+                list_for_each_entry_safe(buffer_entry, buffer_next, &rm_buffer->buffer_head->list, list){
+                        kmem_cache_free(buffer_cache, buffer_entry);
                 }
 	}
 	rb_erase(&rm_buffer->node, &root);
 	kfree(rm_buffer);
+exit:
 	spin_unlock(&rb_tree_lock);
+
 	return 0;
 }
 
