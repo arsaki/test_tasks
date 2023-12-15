@@ -37,9 +37,14 @@
 #include <linux/sched.h>
 #include <linux/rbtree.h>
 
+#define MODE_DEFAULT 0
+#define MODE_SINGLE 1
+#define MODE_MULTIPLE 2
 
-static char *mode_string = "default";
-module_param(mode_string, charp, 0000);
+
+static int mode_selector = MODE_DEFAULT;
+static char *mode = "default";
+module_param(mode, charp, 0000);
 
 #define BUFFER_DEPTH 1000
 #define DEVICE_NAME "sbertask"
@@ -62,10 +67,12 @@ struct rb_buf_node {
 	struct buffer_element *buffer_tail;
 	int buffer_length;
 	pid_t pid;
+	spinlock_t spinlock;
 };
 
 static struct rb_root root = RB_ROOT;
 
+DEFINE_SPINLOCK(buffer_lock);
 DEFINE_SPINLOCK(rb_tree_lock);
 
 static int add_buffer(pid_t pid)
@@ -101,6 +108,7 @@ static int add_buffer(pid_t pid)
 	new_buffer->buffer_head = NULL;
 	new_buffer->buffer_tail = NULL;
 	new_buffer->buffer_length = 0;
+	spin_lock_init(&new_buffer->spinlock);
 exit:	
 	spin_unlock(&rb_tree_lock);
 
@@ -231,13 +239,12 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 
 static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size_t length, loff_t *off_p)
 {
-	DEFINE_SPINLOCK(buffer_write_lock);
 	struct rb_buf_node * buf_node;
 	long unsigned i, ret = 0;
 
 	pr_info("sbertask: process with pid %u write device\n", current->pid);	
 
-	spin_lock(&buffer_write_lock);
+	spin_lock(&buffer_lock);
 
 	buf_node = get_buffer(current->pid);
 
@@ -275,7 +282,7 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	}
 	ret = i;
 
-exit:	spin_unlock(&buffer_write_lock);
+exit:	spin_unlock(&buffer_lock);
 
 	return ret;
 };
@@ -292,13 +299,25 @@ const struct file_operations f_ops = {
 
 static int __init module_start(void)
 {
-	pr_info("sbertask: mode is  %s\n", mode_string);
+	if 	(!strcmp(mode, "default"))
+		mode_selector = MODE_DEFAULT;
+	else if (!strcmp(mode, "single"))
+		mode_selector = MODE_SINGLE;
+	else if (!strcmp(mode, "multiple"))
+		mode_selector = MODE_MULTIPLE;
+	else {
+		pr_err("sbertask: wrong mode setted. Only default/single/multiple modes supported\n");
+		return 1;
+	};
+
+
+	pr_info("sbertask: mode is %s\n", mode);
 	
 	/* Register /dev/sbertask */
 	major_number = register_chrdev(0, DEVICE_NAME, &f_ops);
 	if (major_number < 0){
 		pr_err("sbertask: can't register device %s", DEVICE_NAME);
-		return 1;
+		return 2;
 	}
 	pr_info("sbertask: assigned major number %d\n", major_number);
 
@@ -307,7 +326,7 @@ static int __init module_start(void)
 	if (buffer_cache == NULL){
 		pr_err("sbertask: can't create buffer cache\n");
 		unregister_chrdev(major_number, DEVICE_NAME);
-		return 2;
+		return 3;
 	}
 	pr_info("sbertask: module successfully loaded\n");
 	return 0;
