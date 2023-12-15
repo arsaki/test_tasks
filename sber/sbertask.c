@@ -166,6 +166,11 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 	/* Buffer create */
 	if (!add_buffer(current->pid))
 		pr_info("sbertask: process with pid %u successfully opened device\n", current->pid);
+	else{ 
+		pr_err("sbertask: error - can't allocate buffer memory for pid %u\n", current->pid);
+		return -ENOSPC;
+	}
+
 	return 0;
 };
 
@@ -235,6 +240,9 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	long unsigned i;
 
 	pr_info("sbertask: process with pid %u write device\n", current->pid);	
+	
+	spin_lock (&rb_tree_lock);
+
 	buf_node = get_buffer(current->pid);
 	if (buf_node == NULL){
 		pr_err("sbertask: can't get buffer\n");
@@ -269,6 +277,7 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	}
 	
 	spin_unlock(&buffer_lock);
+	spin_unlock(&rb_tree_lock);
 
 	return i;
 };
