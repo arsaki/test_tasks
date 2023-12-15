@@ -66,7 +66,6 @@ struct rb_buf_node {
 
 static struct rb_root root = RB_ROOT;
 
-DEFINE_SPINLOCK(buffer_lock);
 DEFINE_SPINLOCK(rb_tree_lock);
 
 static int add_buffer(pid_t pid)
@@ -92,6 +91,7 @@ static int add_buffer(pid_t pid)
 	new_buffer = kmalloc(sizeof(struct rb_buf_node), GFP_ATOMIC);
 	if (new_buffer == NULL){
 		pr_err("sbertask: can`t allocate memory for buffer!!!\n");
+		spin_unlock(&rb_tree_lock);
 		return 1;
 	}
 	/* Add new node and rebalance tree. */
@@ -111,7 +111,8 @@ static struct rb_buf_node *get_buffer(pid_t pid)
 {
 	struct rb_node **node = &(root.rb_node); 
 	struct rb_buf_node * buffer;
-
+	
+	spin_lock(&rb_tree_lock);
 	/* Sliding on tree */
 	while (*node) {
 	        buffer = container_of(*node, struct rb_buf_node, node);
@@ -120,13 +121,11 @@ static struct rb_buf_node *get_buffer(pid_t pid)
 	      	else if (pid > buffer->pid)
 		      	node = &((*node)->rb_right);
 		else if (pid == buffer->pid){
-
 			spin_unlock(&rb_tree_lock);
-			
 			return buffer;
 		}
 	}
-
+	spin_unlock(&rb_tree_lock);
 	pr_err("sbertask: get_buffer(): no buffer found by pid %u\n", current->pid);
 	return NULL;
 }
@@ -150,8 +149,8 @@ static int rm_buffer(pid_t pid)
 	}
 	rb_erase(&rm_buffer->node, &root);
 	kfree(rm_buffer);
-exit:
-	spin_unlock(&rb_tree_lock);
+
+exit:	spin_unlock(&rb_tree_lock);
 
 	return 0;
 }
@@ -161,10 +160,10 @@ exit:
 
 static int sbertask_open (struct inode *inode, struct file *file_p)
 {
+	int ret;
 	try_module_get(THIS_MODULE);
-	pr_info("sbertask: device %s opened\n", DEVICE_NAME);
-	/* Buffer create */
-	if (!add_buffer(current->pid))
+	ret = add_buffer(current->pid);
+	if (!ret)
 		pr_info("sbertask: process with pid %u successfully opened device\n", current->pid);
 	else{ 
 		pr_err("sbertask: error - can't allocate buffer memory for pid %u\n", current->pid);
@@ -177,11 +176,7 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 static int sbertask_release (struct inode *inode, struct file *file_p)
 {
 	module_put(THIS_MODULE);
-	pr_info("sbertask: release\n");
-	/* Buffer delete */
-//        if (!rm_buffer(current->pid))
-                pr_info("sbertask: process with pid %u closed device\n", current->pid);
-	pr_info("sbertask: device %s closed\n", DEVICE_NAME);
+        pr_info("sbertask: process with pid %u closed device\n", current->pid);
 	return 0;
 };
 
@@ -203,10 +198,10 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 		return 0;
 	}
 
-	spin_lock(&buffer_lock);
+//	spin_lock(&buffer_lock);
 	
 	if(put_user(buffer_head->data, buf)){
-		spin_unlock(&buffer_lock);
+//		spin_unlock(&buffer_lock);
 		pr_err("sbertask: can't put data to userspace!\n");
 		return -EINVAL;
 	}
@@ -215,7 +210,7 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 		if((c < buffer_length) && (c < length)){
 			queue_tmp = queue_iter;
 			if(put_user(queue_tmp->data, buf+c)){
-				spin_unlock(&buffer_lock);
+				//spin_unlock(&buffer_lock);
 				pr_err("sbertask: can't put data to userspace!\n");
 				return -EINVAL;
         		}
@@ -230,30 +225,31 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	tmp_buf_node->buffer_head = buffer_head;	
 	tmp_buf_node->buffer_tail = buffer_tail;	
 	tmp_buf_node->buffer_length = --buffer_length;
-	spin_unlock(&buffer_lock);
+//	spin_unlock(&buffer_lock);
 	return c;
 };
 
 static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size_t length, loff_t *off_p)
 {
+	DEFINE_SPINLOCK(buffer_write_lock);
 	struct rb_buf_node * buf_node;
-	long unsigned i;
+	long unsigned i, ret = 0;
 
 	pr_info("sbertask: process with pid %u write device\n", current->pid);	
-	
-	spin_lock (&rb_tree_lock);
+
+	spin_lock(&buffer_write_lock);
 
 	buf_node = get_buffer(current->pid);
+
 	if (buf_node == NULL){
 		pr_err("sbertask: can't get buffer\n");
-		return 0;
+		goto exit;
 	}
 	if (buf_node->buffer_length >= BUFFER_DEPTH){	
-		pr_info("sbertask: queue full\n");
-		return 0;
+		pr_info("sbertask: buffer full\n");
+		goto exit;
 	}
 	
-	spin_lock(&buffer_lock);
 
 	if (buf_node->buffer_length == 0){
 		pr_info("sbertask: making new buffer's queue list\n");
@@ -264,22 +260,24 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	for (i = 0; i < length; buf++, i++){
 		buf_node->buffer_tail = kmem_cache_alloc(buffer_cache, GFP_ATOMIC);
 		if (buf_node->buffer_tail == NULL)	{
-			pr_err("sbertask: can't allocate queue element!\n");
-			return -EINVAL;
+			pr_err("sbertask: can't allocate buffer element!\n");
+			ret = -EINVAL;
+			goto exit;
 		}
 		list_add_tail(&buf_node->buffer_tail->list, &buf_node->buffer_head->list);
 		if (get_user(buf_node->buffer_tail->data, buf)){
 			pr_err("sbertask: can't get data from userspace\n");
-			return -EINVAL;
+			ret = -EINVAL;
+			goto exit;
 		}
 		buf_node->buffer_length++;
 		pr_info("sbertask: getted char '%c'\n", buf_node->buffer_tail->data);
 	}
-	
-	spin_unlock(&buffer_lock);
-	spin_unlock(&rb_tree_lock);
+	ret = i;
 
-	return i;
+exit:	spin_unlock(&buffer_write_lock);
+
+	return ret;
 };
 
 
@@ -305,9 +303,9 @@ static int __init module_start(void)
 	pr_info("sbertask: assigned major number %d\n", major_number);
 
 	/* Cache create */
-	buffer_cache = kmem_cache_create("sbertask_queue", sizeof(struct buffer_element), 0, SLAB_HWCACHE_ALIGN, NULL);
+	buffer_cache = kmem_cache_create("sbertask_buffer", sizeof(struct buffer_element), 0, SLAB_HWCACHE_ALIGN, NULL);
 	if (buffer_cache == NULL){
-		pr_err("sbertask: can't create queue cache\n");
+		pr_err("sbertask: can't create buffer cache\n");
 		unregister_chrdev(major_number, DEVICE_NAME);
 		return 2;
 	}
@@ -320,10 +318,11 @@ static int __init module_start(void)
 static void __exit module_stop(void)
 {
 	struct rb_node *node;
+	/* Iterate over rb tree */
 	for (node = rb_first(&root); node; node = rb_next(node)){
-		struct rb_buf_node *selected_buf_node;
-                selected_buf_node = container_of( node, struct rb_buf_node, node);
-		rm_buffer(selected_buf_node->pid);	
+		struct rb_buf_node *buf_node;
+                buf_node = container_of( node, struct rb_buf_node, node);
+		rm_buffer(buf_node->pid);	
 	}
 	kmem_cache_destroy(buffer_cache);
 	unregister_chrdev(major_number, DEVICE_NAME);
