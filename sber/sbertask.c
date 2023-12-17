@@ -41,7 +41,6 @@
 #define MODE_SINGLE 1
 #define MODE_MULTIPLE 2
 
-
 static int mode_selector = MODE_DEFAULT;
 static char *mode = "default";
 module_param(mode, charp, 0000);
@@ -52,7 +51,7 @@ module_param(mode, charp, 0000);
 static int major_number;
 static struct kmem_cache *buffer_cache;
 
-/* Each queue consists of buffer_element's */
+/* Each buffer consists of buffer_element's */
 
 struct buffer_element {
 	struct list_head list;
@@ -67,7 +66,6 @@ struct rb_buf_node {
 	struct buffer_element *buffer_tail;
 	int buffer_length;
 	pid_t pid;
-	spinlock_t spinlock;
 };
 
 static struct rb_root root = RB_ROOT;
@@ -108,7 +106,6 @@ static int add_buffer(pid_t pid)
 	new_buffer->buffer_head = NULL;
 	new_buffer->buffer_tail = NULL;
 	new_buffer->buffer_length = 0;
-	spin_lock_init(&new_buffer->spinlock);
 exit:	
 	spin_unlock(&rb_tree_lock);
 
