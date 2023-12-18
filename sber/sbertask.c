@@ -13,10 +13,10 @@
  *	
  *	*Default  - one buffer,	multiple access
  *	*Single   - one buffer, single access
- * 	*Multi - multiple buffers, multiple access
+ * 	*Multi    - multiple buffers, multiple access
  *	
  *	Buffer accept binary data.
- * 	Driver has error(like overflow) and diagnostic messages
+ * 	Driver has errors (like overflow) and diagnostic messages
  * 	Linux API compatible
  *
  *	All buffers placed in red black tree.
@@ -34,6 +34,7 @@
 #include <linux/slab_def.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
+#include <linux/mutex.h>
 #include <linux/sched.h>
 #include <linux/rbtree.h>
 
@@ -72,6 +73,7 @@ static struct rb_root root = RB_ROOT;
 
 DEFINE_SPINLOCK(buffer_lock);
 DEFINE_SPINLOCK(rb_tree_lock);
+static struct mutex mode_single_mutex;
 
 static int add_buffer(pid_t pid)
 {
@@ -79,6 +81,7 @@ static int add_buffer(pid_t pid)
 	struct rb_buf_node *buffer;
 	struct rb_node **node = &(root.rb_node); 
         struct rb_node *parent = NULL;
+	int ret = 0;
 
 	spin_lock(&rb_tree_lock);
 
@@ -96,8 +99,8 @@ static int add_buffer(pid_t pid)
 	new_buffer = kmalloc(sizeof(struct rb_buf_node), GFP_ATOMIC);
 	if (new_buffer == NULL){
 		pr_err("sbertask: can`t allocate memory for buffer!!!\n");
-		spin_unlock(&rb_tree_lock);
-		return 1;
+		ret =  -ENOMEM;
+		goto exit;
 	}
 	/* Add new node and rebalance tree. */
 	rb_link_node(&new_buffer->node, parent, node);
@@ -106,10 +109,10 @@ static int add_buffer(pid_t pid)
 	new_buffer->buffer_head = NULL;
 	new_buffer->buffer_tail = NULL;
 	new_buffer->buffer_length = 0;
-exit:	
-	spin_unlock(&rb_tree_lock);
 
-	return 0;
+exit:	spin_unlock(&rb_tree_lock);
+
+	return ret;
 }
 
 static struct rb_buf_node *get_buffer(pid_t pid)
@@ -170,13 +173,34 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 {
 	int ret;
 	try_module_get(THIS_MODULE);
-	ret = add_buffer(current->pid);
+
+	switch (mode_selector){
+	case MODE_MULTI:
+		/* Just add buffer */
+		ret = add_buffer(current->pid);
+		break;
+	case MODE_SINGLE: 
+		/* Add buffer and mutex protect */
+		if (mutex_trylock(&mode_single_mutex))
+			return -EBUSY;
+		ret = add_buffer(0);
+		break;	
+	case MODE_DEFAULT:
+		/* Add buffer with pid 0 */
+		ret = add_buffer(0);
+		break;
+	default:
+		/* Ooops... */
+		pr_err("sbertask: unknown mode_selector\n");
+	}
+	
 	if (!ret)
 		pr_info("sbertask: process with pid %u successfully opened device\n", current->pid);
-	else{ 
+	else if (ret == -ENOMEM){ 
 		pr_err("sbertask: error - can't allocate buffer memory for pid %u\n", current->pid);
-		return -ENOSPC;
-	}
+		return -ENOMEM;
+	} else 
+		pr_err("sbertask: unknown error in sbertask_open()\n");
 
 	return 0;
 };
@@ -184,6 +208,8 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 static int sbertask_release (struct inode *inode, struct file *file_p)
 {
 	module_put(THIS_MODULE);
+	if (mode_selector == MODE_SINGLE)
+		mutex_unlock(&mode_single_mutex);
         pr_info("sbertask: process with pid %u closed device\n", current->pid);
 	return 0;
 };
@@ -242,7 +268,6 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	long unsigned i, ret = 0;
 
 	pr_info("sbertask: process with pid %u write device\n", current->pid);	
-
 	spin_lock(&buffer_lock);
 
 	buf_node = get_buffer(current->pid);
@@ -307,7 +332,6 @@ static int __init module_start(void)
 		return -EINVAL;
 	};
 
-
 	pr_info("sbertask: mode is %s\n", mode);
 	
 	/* Register /dev/sbertask */
@@ -325,6 +349,8 @@ static int __init module_start(void)
 		unregister_chrdev(major_number, DEVICE_NAME);
 		return -ENOMEM;
 	}
+	if (mode_selector == MODE_SINGLE)
+		mutex_init(&mode_single_mutex);
 	pr_info("sbertask: module successfully loaded\n");
 	return 0;
 
