@@ -188,8 +188,9 @@ static int sbertask_release (struct inode *inode, struct file *file_p)
 static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t length, loff_t *off_p)
 {		
 	struct rb_buf_node *tmp_buf_node;
-	struct buffer_element *buffer_head, *buffer_tail, *queue_tmp, *queue_iter, *queue_iter_next;
+	struct buffer_element *buffer_head, *buffer_tail, *queue_iter, *queue_iter_next;
 	int buffer_length, c = 0;
+
 	pr_info("sbertask: process with pid %u read device\n", current->pid);	
 	tmp_buf_node = get_buffer(current->pid);
       	if (tmp_buf_node == NULL)
@@ -202,35 +203,26 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 		pr_info("sbertask: queue is empty for process with pid %u\n", current->pid);
 		return 0;
 	}
-
-//	spin_lock(&buffer_lock);
 	
 	if(put_user(buffer_head->data, buf)){
-//		spin_unlock(&buffer_lock);
 		pr_err("sbertask: can't put data to userspace!\n");
 		return -EINVAL;
 	}
 	/* time to delete entry */
 	list_for_each_entry_safe(queue_iter, queue_iter_next, &buffer_head->list, list){
 		if((c < buffer_length) && (c < length)){
-			queue_tmp = queue_iter;
-			if(put_user(queue_tmp->data, buf+c)){
-				//spin_unlock(&buffer_lock);
+			if(put_user(queue_iter->data, buf + c)){
 				pr_err("sbertask: can't put data to userspace!\n");
 				return -EINVAL;
         		}
-			pr_info("sbertask: sended '%c'\n", queue_tmp->data);
-	                list_del(&queue_tmp->list);
-	                kmem_cache_free(buffer_cache, queue_tmp);
+			pr_info("sbertask: sended '%c'\n", queue_iter->data);
+	                list_del(&queue_iter->list);
+	                kmem_cache_free(buffer_cache, queue_iter);
 			c++;
 		} else
 			break;
 	}
 	pr_info("sbertask: exit sbertask_read\n");
-	tmp_buf_node->buffer_head = buffer_head;	
-	tmp_buf_node->buffer_tail = buffer_tail;	
-	tmp_buf_node->buffer_length = --buffer_length;
-//	spin_unlock(&buffer_lock);
 	return c;
 };
 
