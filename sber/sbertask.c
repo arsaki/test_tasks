@@ -231,7 +231,7 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	}
 	ret = c;
 
-exit:	spun_unlock(&buffer_lock)
+exit:	spin_unlock(&buffer_lock);
 
 	return ret;
 };
