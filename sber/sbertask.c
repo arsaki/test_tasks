@@ -118,6 +118,7 @@ static struct rb_buf_node *get_buffer(pid_t pid)
 	struct rb_buf_node * buffer;
 	
 	spin_lock(&rb_tree_lock);
+	
 	/* Sliding on tree */
 	while (*node) {
 	        buffer = container_of(*node, struct rb_buf_node, node);
@@ -130,7 +131,9 @@ static struct rb_buf_node *get_buffer(pid_t pid)
 			return buffer;
 		}
 	}
+	
 	spin_unlock(&rb_tree_lock);
+
 	pr_err("sbertask: get_buffer(): no buffer found by pid %u\n", current->pid);
 	return NULL;
 }
@@ -190,8 +193,11 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	struct rb_buf_node *tmp_buf_node;
 	struct buffer_element *buffer_head, *buffer_tail, *queue_iter, *queue_iter_next;
 	int buffer_length, c = 0, ret;
+
 	pr_info("sbertask: process with pid %u read device\n", current->pid);	
+	
 	spin_lock(&buffer_lock);
+	
 	tmp_buf_node = get_buffer(current->pid);
       	if (tmp_buf_node == NULL)
 		return -EINVAL;	
@@ -224,7 +230,9 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 			break;
 	}
 	ret = c;
+
 exit:	spun_unlock(&buffer_lock)
+
 	return ret;
 };
 
@@ -247,8 +255,6 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 		pr_info("sbertask: buffer full\n");
 		goto exit;
 	}
-	
-
 	if (buf_node->buffer_length == 0){
 		pr_info("sbertask: making new buffer's queue list\n");
 		buf_node->buffer_head = kmem_cache_alloc(buffer_cache, GFP_ATOMIC);
