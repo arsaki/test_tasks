@@ -364,7 +364,17 @@ static void __exit module_stop(void)
 	for (node = rb_first(&root); node; node = rb_next(node)){
 		struct rb_buf_node *buf_node;
                 buf_node = container_of( node, struct rb_buf_node, node);
-		rm_buffer(buf_node->pid);	
+		switch (mode_selector){
+		case MODE_DEFAULT:
+		case MODE_SINGLE:
+			rm_buffer(0);
+			break;
+		case MODE_MULTI:	
+			rm_buffer(buf_node->pid);	
+			break;
+		default:
+  	     	        /* Ooops... */
+        	        pr_err("sbertask: unknown mode_selector\n");
 	}
 	kmem_cache_destroy(buffer_cache);
 	unregister_chrdev(major_number, DEVICE_NAME);
