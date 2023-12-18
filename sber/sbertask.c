@@ -13,7 +13,7 @@
  *	
  *	*Default  - one buffer,	multiple access
  *	*Single   - one buffer, single access
- * 	*Multiple - multiple buffers, multiple access
+ * 	*Multi - multiple buffers, multiple access
  *	
  *	Buffer accept binary data.
  * 	Driver has error(like overflow) and diagnostic messages
@@ -39,7 +39,7 @@
 
 #define MODE_DEFAULT 0
 #define MODE_SINGLE 1
-#define MODE_MULTIPLE 2
+#define MODE_MULTI 2
 
 static int mode_selector = MODE_DEFAULT;
 static char *mode = "default";
@@ -300,11 +300,11 @@ static int __init module_start(void)
 		mode_selector = MODE_DEFAULT;
 	else if (!strcmp(mode, "single"))
 		mode_selector = MODE_SINGLE;
-	else if (!strcmp(mode, "multiple"))
-		mode_selector = MODE_MULTIPLE;
+	else if (!strcmp(mode, "multi"))
+		mode_selector = MODE_MULTI;
 	else {
-		pr_err("sbertask: wrong mode setted. Only default/single/multiple modes supported\n");
-		return 1;
+		pr_err("sbertask: wrong mode setted. Only default/single/multi modes supported\n");
+		return -EINVAL;
 	};
 
 
@@ -314,7 +314,7 @@ static int __init module_start(void)
 	major_number = register_chrdev(0, DEVICE_NAME, &f_ops);
 	if (major_number < 0){
 		pr_err("sbertask: can't register device %s", DEVICE_NAME);
-		return 2;
+		return -ENXIO;
 	}
 	pr_info("sbertask: assigned major number %d\n", major_number);
 
@@ -323,7 +323,7 @@ static int __init module_start(void)
 	if (buffer_cache == NULL){
 		pr_err("sbertask: can't create buffer cache\n");
 		unregister_chrdev(major_number, DEVICE_NAME);
-		return 3;
+		return -ENOMEM;
 	}
 	pr_info("sbertask: module successfully loaded\n");
 	return 0;
