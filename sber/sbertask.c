@@ -68,7 +68,8 @@ struct rb_buf_node {
 	int buffer_length;
 	int write_ready;
 	int read_ready;
-	wait_queue_head_t wq;
+	wait_queue_head_t read_wq;
+	wait_queue_head_t write_wq;
 	pid_t pid;
 };
 
@@ -116,7 +117,8 @@ static int add_buffer(pid_t pid)
 	new_buffer->buffer_length = 0;
 	new_buffer->read_ready = 0;
 	new_buffer->write_ready = 1;
-	init_waitqueue_head(&new_buffer->wq);
+	init_waitqueue_head(&new_buffer->read_wq);
+	init_waitqueue_head(&new_buffer->write_wq);
 
 exit:	spin_unlock(&rb_tree_lock);
 
@@ -250,8 +252,7 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 		pr_info("sbertask: queue is empty for process with pid %u\n", current->pid);
 		buf_node->read_ready = 0;
 		buf_node->write_ready = 1;
-		wake_up_interruptible(&buf_node->wq);
-		wait_event_interruptible(buf_node->wq, buf_node->read_ready != 0);
+		wait_event_interruptible(buf_node->read_wq, buf_node->read_ready != 0);
 		buffer_head   = buf_node->buffer_head;	
 		buffer_length = buf_node->buffer_length;
 	}
@@ -260,7 +261,7 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 		ret = -EINVAL;
 		goto exit;
 	}
-	/* time to delete entry */
+	/* time to send byte and delete entry */
 	list_for_each_entry_safe(queue_iter, queue_iter_next, &buffer_head->list, list){
 		if((c < buffer_length) && (c < length)){
 			if(put_user(queue_iter->data, buf + c)){
@@ -280,6 +281,7 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 exit:	if (driver_mode == MODE_DEFAULT)
 		spin_unlock(&buffer_lock);
 
+	wake_up_interruptible(&buf_node->write_wq);
 	return ret;
 };
 
@@ -309,10 +311,8 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	}
 	if (buf_node->buffer_length >= BUFFER_DEPTH){	
 		pr_info("sbertask: buffer full\n");
-		buf_node->read_ready = 1;
 		buf_node->write_ready = 0;
-		wake_up_interruptible(&buf_node->wq);
-		wait_event_interruptible(buf_node->wq, buf_node->write_ready != 0);
+		wait_event_interruptible(buf_node->write_wq, buf_node->write_ready != 0);
 	}
 	if (buf_node->buffer_length == 0){
 		pr_info("sbertask: making new buffer's queue list\n");
@@ -340,7 +340,8 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 
 exit:	if (driver_mode == MODE_DEFAULT)
 		spin_unlock(&buffer_lock);
-
+	buf_node->read_ready = 1;
+	wake_up_interruptible(&buf_node->read_wq);
 	return ret;
 };
 
