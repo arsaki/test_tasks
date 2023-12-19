@@ -172,7 +172,6 @@ exit:	spin_unlock(&rb_tree_lock);
 static int sbertask_open (struct inode *inode, struct file *file_p)
 {
 	int ret;
-	try_module_get(THIS_MODULE);
 
 	switch (mode_selector){
 	case MODE_MULTI:
@@ -200,7 +199,9 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 		pr_err("sbertask: error - can't allocate buffer memory for pid %u\n", current->pid);
 		return -ENOMEM;
 	} else 
-		pr_err("sbertask: unknown error in sbertask_open()\n");
+		pr_err("sbertask: unknown add_buffer() error in sbertask_open(), return code is %d \n", ret);
+	
+	try_module_get(THIS_MODULE);
 
 	return 0;
 };
@@ -216,7 +217,7 @@ static int sbertask_release (struct inode *inode, struct file *file_p)
 
 static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t length, loff_t *off_p)
 {		
-	struct rb_buf_node *tmp_buf_node;
+	struct rb_buf_node *buf_node;
 	struct buffer_element *buffer_head, *buffer_tail, *queue_iter, *queue_iter_next;
 	int buffer_length, c = 0, ret;
 
@@ -224,12 +225,16 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	
 	spin_lock(&buffer_lock);
 	
-	tmp_buf_node = get_buffer(current->pid);
-      	if (tmp_buf_node == NULL)
+        if (mode_selector == MODE_DEFAULT || mode_selector == MODE_SINGLE)
+                buf_node = get_buffer(0);
+        else if (mode_selector == MODE_MULTI)
+                buf_node = get_buffer(current->pid);
+
+      	if (buf_node == NULL)
 		return -EINVAL;	
-	buffer_head   = tmp_buf_node->buffer_head;	
-	buffer_tail   = tmp_buf_node->buffer_tail;	
-	buffer_length = tmp_buf_node->buffer_length;
+	buffer_head   = buf_node->buffer_head;	
+	buffer_tail   = buf_node->buffer_tail;	
+	buffer_length = buf_node->buffer_length;
 	if(!buffer_head){
 		pr_info("sbertask: queue is empty for process with pid %u\n", current->pid);
 		ret = 0;
@@ -267,10 +272,13 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	struct rb_buf_node * buf_node;
 	long unsigned i, ret = 0;
 
-	pr_info("sbertask: process with pid %u write device\n", current->pid);	
+	pr_info("sbertask: process with pid %u writes to device\n", current->pid);	
 	spin_lock(&buffer_lock);
 
-	buf_node = get_buffer(current->pid);
+	if (mode_selector == MODE_DEFAULT || mode_selector == MODE_SINGLE)
+		buf_node = get_buffer(0);
+	else if (mode_selector == MODE_MULTI)
+		buf_node = get_buffer(current->pid);
 
 	if (buf_node == NULL){
 		pr_err("sbertask: can't get buffer\n");
@@ -288,7 +296,7 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	}
 	for (i = 0; i < length; buf++, i++){
 		buf_node->buffer_tail = kmem_cache_alloc(buffer_cache, GFP_ATOMIC);
-		if (buf_node->buffer_tail == NULL)	{
+		if (buf_node->buffer_tail == NULL){
 			pr_err("sbertask: can't allocate buffer element!\n");
 			ret = -EINVAL;
 			goto exit;
@@ -349,9 +357,11 @@ static int __init module_start(void)
 		unregister_chrdev(major_number, DEVICE_NAME);
 		return -ENOMEM;
 	}
+
 	if (mode_selector == MODE_SINGLE)
 		mutex_init(&mode_single_mutex);
 	pr_info("sbertask: module successfully loaded\n");
+
 	return 0;
 
 
@@ -372,9 +382,7 @@ static void __exit module_stop(void)
 		case MODE_MULTI:	
 			rm_buffer(buf_node->pid);	
 			break;
-		default:
-  	     	        /* Ooops... */
-        	        pr_err("sbertask: unknown mode_selector\n");
+		}
 	}
 	kmem_cache_destroy(buffer_cache);
 	unregister_chrdev(major_number, DEVICE_NAME);
@@ -386,6 +394,6 @@ module_exit(module_stop);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Arsenii Akimov <arseniumfrela@bk.ru>");
-MODULE_DESCRIPTION("FIFO buffer driver. Runs 3 modes: default, single, multiple");
-MODULE_PARM_DESC(mode_string, "Select  mode: default/single/multiple");
+MODULE_DESCRIPTION("FIFO buffer driver. Runs 3 modes: default, single, multi");
+MODULE_PARM_DESC(mode_string, "Select  mode: default/single/multi");
 
