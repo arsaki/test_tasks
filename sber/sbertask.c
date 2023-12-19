@@ -66,6 +66,9 @@ struct rb_buf_node {
 	struct buffer_element *buffer_head;
 	struct buffer_element *buffer_tail;
 	int buffer_length;
+	int write_ready;
+	int read_ready;
+	wait_queue_head_t wq;
 	pid_t pid;
 };
 
@@ -73,7 +76,9 @@ static struct rb_root root = RB_ROOT;
 
 DEFINE_SPINLOCK(buffer_lock);
 DEFINE_SPINLOCK(rb_tree_lock);
+
 static struct mutex mode_single_mutex;
+
 
 static int add_buffer(pid_t pid)
 {
@@ -109,6 +114,9 @@ static int add_buffer(pid_t pid)
 	new_buffer->buffer_head = NULL;
 	new_buffer->buffer_tail = NULL;
 	new_buffer->buffer_length = 0;
+	new_buffer->read_ready = 0;
+	new_buffer->write_ready = 1;
+	init_waitqueue_head(&new_buffer->wq);
 
 exit:	spin_unlock(&rb_tree_lock);
 
@@ -214,7 +222,7 @@ static int sbertask_release (struct inode *inode, struct file *file_p)
 static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t length, loff_t *off_p)
 {		
 	struct rb_buf_node *buf_node;
-	struct buffer_element *buffer_head, *buffer_tail, *queue_iter, *queue_iter_next;
+	struct buffer_element *buffer_head,  *queue_iter, *queue_iter_next;
 	int buffer_length, c = 0, ret;
 
 	pr_info("sbertask: process with pid %u read device\n", current->pid);	
@@ -233,16 +241,19 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 			spin_unlock(&rb_tree_lock);
 			break;
 	}
-
       	if (buf_node == NULL)
 		return -EINVAL;	
+	
 	buffer_head   = buf_node->buffer_head;	
-	buffer_tail   = buf_node->buffer_tail;	
 	buffer_length = buf_node->buffer_length;
 	if(!buffer_head){
 		pr_info("sbertask: queue is empty for process with pid %u\n", current->pid);
-		ret = 0;
-		goto exit;
+		buf_node->read_ready = 0;
+		buf_node->write_ready = 1;
+		wake_up_interruptible(&buf_node->wq);
+		wait_event_interruptible(buf_node->wq, buf_node->read_ready != 0);
+		buffer_head   = buf_node->buffer_head;	
+		buffer_length = buf_node->buffer_length;
 	}
 	if(put_user(buffer_head->data, buf)){
 		pr_err("sbertask: can't put data to userspace!\n");
@@ -298,7 +309,10 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	}
 	if (buf_node->buffer_length >= BUFFER_DEPTH){	
 		pr_info("sbertask: buffer full\n");
-		goto exit;
+		buf_node->read_ready = 1;
+		buf_node->write_ready = 0;
+		wake_up_interruptible(&buf_node->wq);
+		wait_event_interruptible(buf_node->wq, buf_node->write_ready != 0);
 	}
 	if (buf_node->buffer_length == 0){
 		pr_info("sbertask: making new buffer's queue list\n");
