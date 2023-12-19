@@ -42,7 +42,7 @@
 #define MODE_SINGLE 1
 #define MODE_MULTI 2
 
-static int mode_selector = MODE_DEFAULT;
+static int driver_mode = MODE_DEFAULT;
 static char *mode = "default";
 module_param(mode, charp, 0000);
 
@@ -120,8 +120,6 @@ static struct rb_buf_node *get_buffer(pid_t pid)
 	struct rb_node **node = &(root.rb_node); 
 	struct rb_buf_node * buffer;
 	
-	spin_lock(&rb_tree_lock);
-	
 	/* Sliding on tree */
 	while (*node) {
 	        buffer = container_of(*node, struct rb_buf_node, node);
@@ -135,8 +133,6 @@ static struct rb_buf_node *get_buffer(pid_t pid)
 		}
 	}
 	
-	spin_unlock(&rb_tree_lock);
-
 	pr_err("sbertask: get_buffer(): no buffer found by pid %u\n", current->pid);
 	return NULL;
 }
@@ -173,7 +169,7 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 {
 	int ret;
 
-	switch (mode_selector){
+	switch (driver_mode){
 	case MODE_MULTI:
 		/* Just add buffer */
 		ret = add_buffer(current->pid);
@@ -190,7 +186,7 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 		break;
 	default:
 		/* Ooops... */
-		pr_err("sbertask: unknown mode_selector\n");
+		pr_err("sbertask: unknown driver_mode\n");
 	}
 	
 	if (!ret)
@@ -209,7 +205,7 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 static int sbertask_release (struct inode *inode, struct file *file_p)
 {
 	module_put(THIS_MODULE);
-	if (mode_selector == MODE_SINGLE)
+	if (driver_mode == MODE_SINGLE)
 		mutex_unlock(&mode_single_mutex);
         pr_info("sbertask: process with pid %u closed device\n", current->pid);
 	return 0;
@@ -222,13 +218,21 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	int buffer_length, c = 0, ret;
 
 	pr_info("sbertask: process with pid %u read device\n", current->pid);	
-	
-	spin_lock(&buffer_lock);
-	
-        if (mode_selector == MODE_DEFAULT || mode_selector == MODE_SINGLE)
-                buf_node = get_buffer(0);
-        else if (mode_selector == MODE_MULTI)
-                buf_node = get_buffer(current->pid);
+
+	switch (driver_mode) {
+		case MODE_DEFAULT:
+			spin_lock(&buffer_lock);
+			buf_node=get_buffer(0);
+			break;
+		case MODE_SINGLE:
+			buf_node=get_buffer(0);
+			break;
+		case MODE_MULTI:
+			spin_lock(&rb_tree_lock);
+                	buf_node = get_buffer(current->pid);
+			spin_unlock(&rb_tree_lock);
+			break;
+	}
 
       	if (buf_node == NULL)
 		return -EINVAL;	
@@ -262,7 +266,8 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	}
 	ret = c;
 
-exit:	spin_unlock(&buffer_lock);
+exit:	if (driver_mode == MODE_DEFAULT)
+		spin_unlock(&buffer_lock);
 
 	return ret;
 };
@@ -273,12 +278,19 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	long unsigned i, ret = 0;
 
 	pr_info("sbertask: process with pid %u writes to device\n", current->pid);	
-	spin_lock(&buffer_lock);
-
-	if (mode_selector == MODE_DEFAULT || mode_selector == MODE_SINGLE)
-		buf_node = get_buffer(0);
-	else if (mode_selector == MODE_MULTI)
-		buf_node = get_buffer(current->pid);
+	switch (driver_mode) {
+		case MODE_DEFAULT:
+			buf_node=get_buffer(0);
+			break;
+		case MODE_SINGLE:
+			buf_node=get_buffer(0);
+			break;
+		case MODE_MULTI:
+			spin_lock(&rb_tree_lock);
+                	buf_node = get_buffer(current->pid);
+			spin_unlock(&rb_tree_lock);
+			break;
+	}
 
 	if (buf_node == NULL){
 		pr_err("sbertask: can't get buffer\n");
@@ -312,7 +324,8 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	}
 	ret = i;
 
-exit:	spin_unlock(&buffer_lock);
+exit:	if (driver_mode == MODE_DEFAULT)
+		spin_unlock(&buffer_lock);
 
 	return ret;
 };
@@ -330,11 +343,11 @@ const struct file_operations f_ops = {
 static int __init module_start(void)
 {
 	if 	(!strcmp(mode, "default"))
-		mode_selector = MODE_DEFAULT;
+		driver_mode = MODE_DEFAULT;
 	else if (!strcmp(mode, "single"))
-		mode_selector = MODE_SINGLE;
+		driver_mode = MODE_SINGLE;
 	else if (!strcmp(mode, "multi"))
-		mode_selector = MODE_MULTI;
+		driver_mode = MODE_MULTI;
 	else {
 		pr_err("sbertask: wrong mode setted. Only default/single/multi modes supported\n");
 		return -EINVAL;
@@ -358,7 +371,7 @@ static int __init module_start(void)
 		return -ENOMEM;
 	}
 
-	if (mode_selector == MODE_SINGLE)
+	if (driver_mode == MODE_SINGLE)
 		mutex_init(&mode_single_mutex);
 	pr_info("sbertask: module successfully loaded\n");
 
@@ -374,7 +387,7 @@ static void __exit module_stop(void)
 	for (node = rb_first(&root); node; node = rb_next(node)){
 		struct rb_buf_node *buf_node;
                 buf_node = container_of( node, struct rb_buf_node, node);
-		switch (mode_selector){
+		switch (driver_mode){
 		case MODE_DEFAULT:
 		case MODE_SINGLE:
 			rm_buffer(0);
