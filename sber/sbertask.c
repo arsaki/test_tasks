@@ -194,11 +194,7 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 		/* Add buffer with pid 0 */
 		ret = add_buffer(0);
 		break;
-	default:
-		/* Ooops... */
-		pr_err("sbertask: unknown driver_mode\n");
 	}
-	
 	if (!ret)
 		pr_info("sbertask: process with pid %u successfully opened device\n", current->pid);
 	else if (ret == -ENOMEM){ 
@@ -214,19 +210,19 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 
 static int sbertask_release (struct inode *inode, struct file *file_p)
 {
+	struct rb_buf_node *buf_node;
 	module_put(THIS_MODULE);
 	switch (driver_mode) {
+		case MODE_SINGLE:
+			mutex_unlock(&mode_single_mutex);
+			buf_node=get_buffer(0);
+			buf_node->read_ready = 0;
+			wake_up_interruptible(&buf_node->read_wq);
+			break;
 		case MODE_DEFAULT:
 			buf_node=get_buffer(0);
-			break;
-		case MODE_SINGLE:
-			buf_node=get_buffer(0);
-			mutex_unlock(&mode_single_mutex);
-			break;
-		case MODE_MULTI:
-			spin_lock(&rb_tree_lock);
-                	buf_node = get_buffer(current->pid);
-			spin_unlock(&rb_tree_lock);
+			buf_node->read_ready = 0;
+			wake_up_interruptible(&buf_node->read_wq);
 			break;
 	}
         pr_info("sbertask: process with pid %u closes device\n", current->pid);
