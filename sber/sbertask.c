@@ -215,19 +215,31 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 static int sbertask_release (struct inode *inode, struct file *file_p)
 {
 	module_put(THIS_MODULE);
-	if (driver_mode == MODE_SINGLE)
-		mutex_unlock(&mode_single_mutex);
-        pr_info("sbertask: process with pid %u closed device\n", current->pid);
+	switch (driver_mode) {
+		case MODE_DEFAULT:
+			buf_node=get_buffer(0);
+			break;
+		case MODE_SINGLE:
+			buf_node=get_buffer(0);
+			mutex_unlock(&mode_single_mutex);
+			break;
+		case MODE_MULTI:
+			spin_lock(&rb_tree_lock);
+                	buf_node = get_buffer(current->pid);
+			spin_unlock(&rb_tree_lock);
+			break;
+	}
+        pr_info("sbertask: process with pid %u closes device\n", current->pid);
 	return 0;
 };
 
 static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t length, loff_t *off_p)
 {		
 	struct rb_buf_node *buf_node;
-	struct buffer_element *buffer_head,  *queue_iter, *queue_iter_next;
+	struct buffer_element *buffer_head, *queue_iter, *queue_iter_next;
 	int buffer_length, c = 0, ret;
 
-	pr_info("sbertask: process with pid %u read device\n", current->pid);	
+	pr_info("sbertask: process with pid %u reads device\n", current->pid);	
 
 	switch (driver_mode) {
 		case MODE_DEFAULT:
@@ -248,18 +260,14 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	
 	buffer_head   = buf_node->buffer_head;	
 	buffer_length = buf_node->buffer_length;
-	if(!buffer_head){
+	if(!buffer_head || buffer_length == 0){
 		pr_info("sbertask: queue is empty for process with pid %u\n", current->pid);
 		buf_node->read_ready = 0;
-		buf_node->write_ready = 1;
 		wait_event_interruptible(buf_node->read_wq, buf_node->read_ready != 0);
+		if (buf_node->read_ready == 0)
+			goto exit;
 		buffer_head   = buf_node->buffer_head;	
 		buffer_length = buf_node->buffer_length;
-	}
-	if(put_user(buffer_head->data, buf)){
-		pr_err("sbertask: can't put data to userspace!\n");
-		ret = -EINVAL;
-		goto exit;
 	}
 	/* time to send byte and delete entry */
 	list_for_each_entry_safe(queue_iter, queue_iter_next, &buffer_head->list, list){
@@ -277,11 +285,12 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 			break;
 	}
 	ret = c;
+	buf_node->buffer_length  = 0;
+	buf_node->write_ready = 1;
+	wake_up_interruptible(&buf_node->write_wq);
 
 exit:	if (driver_mode == MODE_DEFAULT)
 		spin_unlock(&buffer_lock);
-
-	wake_up_interruptible(&buf_node->write_wq);
 	return ret;
 };
 
