@@ -123,8 +123,6 @@ static int add_buffer(pid_t pid)
 	init_waitqueue_head(&new_buffer->write_wq);
 
 exit:	spin_unlock(&rb_tree_lock);
-//	new_buffer->finished = 0;
-//	new_buffer->read_ready = 0;
 
 	return ret;
 }
@@ -220,13 +218,13 @@ static int sbertask_release (struct inode *inode, struct file *file_p)
 			mutex_unlock(&mode_single_mutex);
 			buf_node=get_buffer(0);
 			buf_node->read_ready = 0;
-			buf_node->finished = 1;
+//			buf_node->finished = 1;
 			wake_up_interruptible(&buf_node->read_wq);
 			break;
 		case MODE_DEFAULT:
 			buf_node=get_buffer(0);
 			buf_node->read_ready = 0;
-			buf_node->finished = 1;
+//			buf_node->finished = 1;
 			wake_up_interruptible(&buf_node->read_wq);
 			break;
 	}
