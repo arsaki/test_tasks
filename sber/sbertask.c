@@ -68,6 +68,7 @@ struct rb_buf_node {
 	int buffer_length;
 	int write_ready;
 	int read_ready;
+	int finished;
 	wait_queue_head_t read_wq;
 	wait_queue_head_t write_wq;
 	pid_t pid;
@@ -117,13 +118,17 @@ static int add_buffer(pid_t pid)
 	new_buffer->buffer_length = 0;
 	new_buffer->read_ready = 0;
 	new_buffer->write_ready = 1;
+	new_buffer->finished = 0;
 	init_waitqueue_head(&new_buffer->read_wq);
 	init_waitqueue_head(&new_buffer->write_wq);
 
 exit:	spin_unlock(&rb_tree_lock);
+//	new_buffer->finished = 0;
+//	new_buffer->read_ready = 0;
 
 	return ret;
 }
+
 
 static struct rb_buf_node *get_buffer(pid_t pid)
 {
@@ -137,10 +142,8 @@ static struct rb_buf_node *get_buffer(pid_t pid)
 			node = &((*node)->rb_left);
 	      	else if (pid > buffer->pid)
 		      	node = &((*node)->rb_right);
-		else if (pid == buffer->pid){
-			spin_unlock(&rb_tree_lock);
+		else if (pid == buffer->pid)
 			return buffer;
-		}
 	}
 	
 	pr_err("sbertask: get_buffer(): no buffer found by pid %u\n", current->pid);
@@ -217,11 +220,13 @@ static int sbertask_release (struct inode *inode, struct file *file_p)
 			mutex_unlock(&mode_single_mutex);
 			buf_node=get_buffer(0);
 			buf_node->read_ready = 0;
+			buf_node->finished = 1;
 			wake_up_interruptible(&buf_node->read_wq);
 			break;
 		case MODE_DEFAULT:
 			buf_node=get_buffer(0);
 			buf_node->read_ready = 0;
+			buf_node->finished = 1;
 			wake_up_interruptible(&buf_node->read_wq);
 			break;
 	}
@@ -232,8 +237,8 @@ static int sbertask_release (struct inode *inode, struct file *file_p)
 static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t length, loff_t *off_p)
 {		
 	struct rb_buf_node *buf_node;
-	struct buffer_element *buffer_head, *queue_iter, *queue_iter_next;
-	int buffer_length, c = 0, ret;
+	struct buffer_element *queue_iter, *queue_iter_next;
+	int c = 0, ret = 0;
 
 	pr_info("sbertask: process with pid %u reads device\n", current->pid);	
 
@@ -254,20 +259,20 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
       	if (buf_node == NULL)
 		return -EINVAL;	
 	
-	buffer_head   = buf_node->buffer_head;	
-	buffer_length = buf_node->buffer_length;
-	if(!buffer_head || buffer_length == 0){
+	if(!buf_node->buffer_head || buf_node->buffer_length == 0){
 		pr_info("sbertask: queue is empty for process with pid %u\n", current->pid);
 		buf_node->read_ready = 0;
-		wait_event_interruptible(buf_node->read_wq, buf_node->read_ready != 0);
-		if (buf_node->read_ready == 0)
+		wait_event_interruptible(buf_node->read_wq, buf_node->read_ready || buf_node->finished);
+		pr_info("sbertask: buf_node->read_ready %u, buf_node->finished %u\n", buf_node->read_ready, buf_node->finished);
+		if ( !buf_node->read_ready || buf_node->finished){
+			pr_info("sbertask: go to exit\n");
 			goto exit;
-		buffer_head   = buf_node->buffer_head;	
-		buffer_length = buf_node->buffer_length;
+		}
 	}
 	/* time to send byte and delete entry */
-	list_for_each_entry_safe(queue_iter, queue_iter_next, &buffer_head->list, list){
-		if((c < buffer_length) && (c < length)){
+	list_for_each_entry_safe(queue_iter, queue_iter_next, &buf_node->buffer_head->list, list){
+		pr_info("sbertask: list for each entry\n");
+		if((c < buf_node->buffer_length) && (c < length)){
 			if(put_user(queue_iter->data, buf + c)){
 				pr_err("sbertask: can't put data to userspace!\n");
 				ret = -EINVAL;
@@ -281,12 +286,15 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 			break;
 	}
 	ret = c;
-	buf_node->buffer_length  = 0;
+	buf_node->buffer_length -= c;
+	if (buf_node->buffer_length == 0)
+		buf_node->read_ready = 0;
 	buf_node->write_ready = 1;
 	wake_up_interruptible(&buf_node->write_wq);
 
 exit:	if (driver_mode == MODE_DEFAULT)
 		spin_unlock(&buffer_lock);
+	buf_node->finished = 0;
 	return ret;
 };
 
@@ -325,7 +333,7 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 		INIT_LIST_HEAD(&buf_node->buffer_head->list);
 		buf_node->buffer_tail = buf_node->buffer_head;	
 	}
-	for (i = 0; i < length; buf++, i++){
+	for (i = 0; i < length && buf_node->buffer_length < BUFFER_DEPTH ; buf++, i++){
 		buf_node->buffer_tail = kmem_cache_alloc(buffer_cache, GFP_ATOMIC);
 		if (buf_node->buffer_tail == NULL){
 			pr_err("sbertask: can't allocate buffer element!\n");
