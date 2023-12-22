@@ -200,6 +200,8 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 		buf_node = get_buffer(0);
 		buf_node->finished = 0;
 		break;
+	default:
+		pr_err("Undefined behavior in sbertask_open\n");
 	}
 	if (!ret)
 		pr_info("sbertask: process with pid %u opened device\n", current->pid);
@@ -229,6 +231,10 @@ static int sbertask_release (struct inode *inode, struct file *file_p)
 			buf_node->finished = 1;
 			wake_up_interruptible(&buf_node->read_wq);
 			break;
+		case MODE_MULTI:
+			break;
+		default:
+			pr_err("Undefined_behavior in sbertask_release()\n");
 	}
         pr_info("sbertask: process with pid %u closes device\n", current->pid);
 	module_put(THIS_MODULE);
@@ -256,6 +262,8 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
                 	buf_node = get_buffer(current->pid);
 			spin_unlock(&rb_tree_lock);
 			break;
+		default:
+			pr_err("Undefined behavior in sbertask_read()\n");
 	}
       	if (buf_node == NULL)
 		return -EINVAL;	
@@ -315,6 +323,8 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
                 	buf_node = get_buffer(current->pid);
 			spin_unlock(&rb_tree_lock);
 			break;
+		default:
+			pr_err("Undefined behavior in sbertask_write()\n");
 	}
 
 	if (buf_node == NULL){
@@ -424,6 +434,8 @@ static void __exit module_stop(void)
 		case MODE_MULTI:	
 			rm_buffer(buf_node->pid);	
 			break;
+		default:
+			pr_err("sbertask: indefined behavior in module_stop()\n");
 		}
 	}
 	kmem_cache_destroy(buffer_cache);
