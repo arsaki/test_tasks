@@ -179,21 +179,27 @@ exit:	spin_unlock(&rb_tree_lock);
 static int sbertask_open (struct inode *inode, struct file *file_p)
 {
 	int ret;
-
+	struct rb_buf_node *buf_node;
 	switch (driver_mode){
 	case MODE_MULTI:
 		/* Just add buffer */
 		ret = add_buffer(current->pid);
+		buf_node = get_buffer(current->pid);
+		buf_node->finished = 0;
 		break;
 	case MODE_SINGLE: 
 		/* Add buffer and mutex protect */
 		if (mutex_trylock(&mode_single_mutex))
 			return -EBUSY;
 		ret = add_buffer(0);
+		buf_node = get_buffer(0);
+		buf_node->finished = 0;
 		break;	
 	case MODE_DEFAULT:
 		/* Add buffer with pid 0 */
 		ret = add_buffer(0);
+		buf_node = get_buffer(0);
+		buf_node->finished = 0;
 		break;
 	}
 	if (!ret)
@@ -217,14 +223,12 @@ static int sbertask_release (struct inode *inode, struct file *file_p)
 		case MODE_SINGLE:
 			mutex_unlock(&mode_single_mutex);
 			buf_node=get_buffer(0);
-			buf_node->read_ready = 0;
-//			buf_node->finished = 1;
+			buf_node->finished = 1;
 			wake_up_interruptible(&buf_node->read_wq);
 			break;
 		case MODE_DEFAULT:
 			buf_node=get_buffer(0);
-			buf_node->read_ready = 0;
-//			buf_node->finished = 1;
+			buf_node->finished = 1;
 			wake_up_interruptible(&buf_node->read_wq);
 			break;
 	}
@@ -262,27 +266,28 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 		buf_node->read_ready = 0;
 		wait_event_interruptible(buf_node->read_wq, buf_node->read_ready || buf_node->finished);
 		pr_info("sbertask: buf_node->read_ready %u, buf_node->finished %u\n", buf_node->read_ready, buf_node->finished);
-		if ( !buf_node->read_ready || buf_node->finished){
+		if ( !buf_node->read_ready || !buf_node->buffer_length) {
 			pr_info("sbertask: go to exit\n");
 			goto exit;
 		}
 	}
 	/* time to send byte and delete entry */
-	list_for_each_entry_safe(queue_iter, queue_iter_next, &buf_node->buffer_head->list, list){
-		pr_info("sbertask: list for each entry\n");
-		if((c < buf_node->buffer_length) && (c < length)){
-			if(put_user(queue_iter->data, buf + c)){
-				pr_err("sbertask: can't put data to userspace!\n");
-				ret = -EINVAL;
-				goto exit;
-        		}
-			pr_info("sbertask: sended '%c'\n", queue_iter->data);
-	                list_del(&queue_iter->list);
-	                kmem_cache_free(buffer_cache, queue_iter);
-			c++;
-		} else
-			break;
-	}
+	if (buf_node->buffer_length)
+		list_for_each_entry_safe(queue_iter, queue_iter_next, &buf_node->buffer_head->list, list){
+			pr_info("sbertask: list for each entry\n");
+			if((c < buf_node->buffer_length) && (c < length)){
+				if(put_user(queue_iter->data, buf + c)){
+					pr_err("sbertask: can't put data to userspace!\n");
+					ret = -EINVAL;
+					goto exit;
+				}
+				pr_info("sbertask: sended '%c'\n", queue_iter->data);
+				list_del(&queue_iter->list);
+				kmem_cache_free(buffer_cache, queue_iter);
+				c++;
+			} else
+				break;
+		}
 	ret = c;
 	buf_node->buffer_length -= c;
 	if (buf_node->buffer_length == 0)
@@ -292,7 +297,6 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 
 exit:	if (driver_mode == MODE_DEFAULT)
 		spin_unlock(&buffer_lock);
-	buf_node->finished = 0;
 	return ret;
 };
 
