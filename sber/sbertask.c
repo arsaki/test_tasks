@@ -75,12 +75,10 @@ struct rb_buf_node {
 };
 
 static struct rb_root root = RB_ROOT;
-
-DEFINE_SPINLOCK(buffer_lock);
-DEFINE_SPINLOCK(rb_tree_lock);
-
 static struct mutex mode_single_mutex;
 
+static DEFINE_SPINLOCK(buffer_lock);
+static DEFINE_SPINLOCK(rb_tree_lock);
 
 static int add_buffer(pid_t pid)
 {
@@ -189,8 +187,9 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 		break;
 	case MODE_SINGLE: 
 		/* Add buffer and mutex protect */
-		if (mutex_trylock(&mode_single_mutex))
+		if (!mutex_trylock(&mode_single_mutex)){
 			return -EBUSY;
+		}
 		ret = add_buffer(0);
 		buf_node = get_buffer(0);
 		buf_node->finished = 0;
@@ -203,7 +202,7 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 		break;
 	}
 	if (!ret)
-		pr_info("sbertask: process with pid %u successfully opened device\n", current->pid);
+		pr_info("sbertask: process with pid %u opened device\n", current->pid);
 	else if (ret == -ENOMEM){ 
 		pr_err("sbertask: error - can't allocate buffer memory for pid %u\n", current->pid);
 		return -ENOMEM;
@@ -218,21 +217,21 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 static int sbertask_release (struct inode *inode, struct file *file_p)
 {
 	struct rb_buf_node *buf_node;
-	module_put(THIS_MODULE);
 	switch (driver_mode) {
 		case MODE_SINGLE:
-			mutex_unlock(&mode_single_mutex);
-			buf_node=get_buffer(0);
+			buf_node = get_buffer(0);
 			buf_node->finished = 1;
 			wake_up_interruptible(&buf_node->read_wq);
+			mutex_unlock(&mode_single_mutex);
 			break;
 		case MODE_DEFAULT:
-			buf_node=get_buffer(0);
+			buf_node = get_buffer(0);
 			buf_node->finished = 1;
 			wake_up_interruptible(&buf_node->read_wq);
 			break;
 	}
         pr_info("sbertask: process with pid %u closes device\n", current->pid);
+	module_put(THIS_MODULE);
 	return 0;
 };
 
@@ -247,10 +246,10 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	switch (driver_mode) {
 		case MODE_DEFAULT:
 			spin_lock(&buffer_lock);
-			buf_node=get_buffer(0);
+			buf_node = get_buffer(0);
 			break;
 		case MODE_SINGLE:
-			buf_node=get_buffer(0);
+			buf_node = get_buffer(0);
 			break;
 		case MODE_MULTI:
 			spin_lock(&rb_tree_lock);
@@ -260,21 +259,19 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	}
       	if (buf_node == NULL)
 		return -EINVAL;	
-	
+	/* sleep if empty buffer */
 	if(!buf_node->buffer_head || buf_node->buffer_length == 0){
 		pr_info("sbertask: queue is empty for process with pid %u\n", current->pid);
 		buf_node->read_ready = 0;
 		wait_event_interruptible(buf_node->read_wq, buf_node->read_ready || buf_node->finished);
-		pr_info("sbertask: buf_node->read_ready %u, buf_node->finished %u\n", buf_node->read_ready, buf_node->finished);
 		if ( !buf_node->read_ready || !buf_node->buffer_length) {
 			pr_info("sbertask: go to exit\n");
 			goto exit;
 		}
 	}
-	/* time to send byte and delete entry */
+	/* it is time to send byte and delete entry */
 	if (buf_node->buffer_length)
 		list_for_each_entry_safe(queue_iter, queue_iter_next, &buf_node->buffer_head->list, list){
-			pr_info("sbertask: list for each entry\n");
 			if((c < buf_node->buffer_length) && (c < length)){
 				if(put_user(queue_iter->data, buf + c)){
 					pr_err("sbertask: can't put data to userspace!\n");
@@ -349,7 +346,7 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 			goto exit;
 		}
 		buf_node->buffer_length++;
-		pr_info("sbertask: getted char '%c'\n", buf_node->buffer_tail->data);
+		pr_info("sbertask: getted '%c'\n", buf_node->buffer_tail->data);
 	}
 	ret = i;
 
@@ -383,12 +380,12 @@ static int __init module_start(void)
 		return -EINVAL;
 	};
 
-	pr_info("sbertask: mode is %s\n", mode);
+	pr_info("sbertask: module runned in %s mode\n", mode);
 	
 	/* Register /dev/sbertask */
 	major_number = register_chrdev(0, DEVICE_NAME, &f_ops);
 	if (major_number < 0){
-		pr_err("sbertask: can't register device %s", DEVICE_NAME);
+		pr_err("sbertask: can't register device %s\n", DEVICE_NAME);
 		return -ENXIO;
 	}
 	pr_info("sbertask: assigned major number %d\n", major_number);
@@ -401,8 +398,10 @@ static int __init module_start(void)
 		return -ENOMEM;
 	}
 
-	if (driver_mode == MODE_SINGLE)
+	if (driver_mode == MODE_SINGLE){
 		mutex_init(&mode_single_mutex);
+	}
+		
 	pr_info("sbertask: module successfully loaded\n");
 
 	return 0;
