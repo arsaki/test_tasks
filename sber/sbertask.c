@@ -131,6 +131,7 @@ static struct rb_buf_node *get_buffer(pid_t pid)
 	struct rb_node **node = &(root.rb_node); 
 	struct rb_buf_node * buffer;
 	
+	spin_lock(&rb_tree_lock);
 	/* Sliding on tree */
 	while (*node) {
 	        buffer = container_of(*node, struct rb_buf_node, node);
@@ -141,7 +142,7 @@ static struct rb_buf_node *get_buffer(pid_t pid)
 		else if (pid == buffer->pid)
 			return buffer;
 	}
-	
+	spin_unlock(&rb_tree_lock);
 	pr_err("sbertask: get_buffer(): no buffer found by pid %u\n", current->pid);
 	return NULL;
 }
@@ -260,7 +261,6 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 		case MODE_MULTI:
 			spin_lock(&rb_tree_lock);
                 	buf_node = get_buffer(current->pid);
-			spin_unlock(&rb_tree_lock);
 			break;
 		default:
 			pr_err("Undefined behavior in sbertask_read()\n");
@@ -302,6 +302,8 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 
 exit:	if (driver_mode == MODE_DEFAULT)
 		spin_unlock(&buffer_lock);
+	if (driver_mode == MODE_MULTI)
+		spin_unlock(&rb_tree_lock);
 	return ret;
 };
 
@@ -321,7 +323,6 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 		case MODE_MULTI:
 			spin_lock(&rb_tree_lock);
                 	buf_node = get_buffer(current->pid);
-			spin_unlock(&rb_tree_lock);
 			break;
 		default:
 			pr_err("Undefined behavior in sbertask_write()\n");
@@ -364,6 +365,8 @@ exit:	if (driver_mode == MODE_DEFAULT)
 		spin_unlock(&buffer_lock);
 	buf_node->read_ready = 1;
 	wake_up_interruptible(&buf_node->read_wq);
+	if (driver_mode == MODE_MULTI)
+		spin_unlock(&rb_tree_lock);
 	return ret;
 };
 
