@@ -141,6 +141,7 @@ static struct rb_buf_node *get_buffer(pid_t pid)
 		else if (pid == buffer->pid){
 			spin_unlock(&rb_tree_lock);
 			return buffer;
+		}
 	}
 	spin_unlock(&rb_tree_lock);
 	pr_err("sbertask: get_buffer(): no buffer found by pid %u\n", current->pid);
