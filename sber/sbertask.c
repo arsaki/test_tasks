@@ -7,8 +7,7 @@
  *	https://www.github.com/arsaki/test_tasks
  *
  * 	Symbol driver, works as FIFO buffer via char device. 
- * 	Buffers aka queues uses "struct list_head". Queues depth = 1000 байт.
- * 	
+ * 	Buffers aka queues uses "struct list_head". Queues depth = 1000 bytes. 
  * 	Driver modes:
  *	
  *	*Default  - one buffer,	multiple access
@@ -38,19 +37,12 @@
 #include <linux/sched.h>
 #include <linux/rbtree.h>
 
-#define MODE_DEFAULT 0
-#define MODE_SINGLE 1
-#define MODE_MULTI 2
-
-static int driver_mode = MODE_DEFAULT;
-static char *mode = "default";
-module_param(mode, charp, 0000);
-
 #define BUFFER_DEPTH 1000
 #define DEVICE_NAME "sbertask"
 
-static int major_number;
-static struct kmem_cache *buffer_cache;
+#define MODE_DEFAULT 0
+#define MODE_SINGLE  1
+#define MODE_MULTI   2
 
 /* Each buffer consists of buffer_element's */
 
@@ -62,23 +54,30 @@ struct buffer_element {
 /* Each fifo buffer placed in red black tree. Pid is a key. */
 
 struct rb_buf_node {
-	struct rb_node node;
-	struct buffer_element *buffer_head;
-	struct buffer_element *buffer_tail;
-	int buffer_length;
-	int write_ready;
-	int read_ready;
-	int finished;
+	struct 	rb_node node;
+	pid_t 	pid;
+	struct 	buffer_element *buffer_head;
+	struct 	buffer_element *buffer_tail;
+	int 	buffer_length;
+	int 	write_ready;
+	int 	read_ready;
+	int 	finished;
 	wait_queue_head_t read_wq;
 	wait_queue_head_t write_wq;
-	pid_t pid;
 };
-
-static struct rb_root root = RB_ROOT;
-static struct mutex mode_single_mutex;
 
 static DEFINE_SPINLOCK(buffer_lock);
 static DEFINE_SPINLOCK(rb_tree_lock);
+static struct mutex mode_single_mutex;
+
+static int driver_mode = MODE_DEFAULT;
+static char *mode = "default";
+module_param(mode, charp, 0000);
+
+static int major_number;
+static struct kmem_cache *buffer_cache;
+
+static struct rb_root root = RB_ROOT;
 
 static int add_buffer(pid_t pid)
 {
@@ -139,7 +138,8 @@ static struct rb_buf_node *get_buffer(pid_t pid)
 			node = &((*node)->rb_left);
 	      	else if (pid > buffer->pid)
 		      	node = &((*node)->rb_right);
-		else if (pid == buffer->pid)
+		else if (pid == buffer->pid){
+			spin_unlock(&rb_tree_lock);
 			return buffer;
 	}
 	spin_unlock(&rb_tree_lock);
