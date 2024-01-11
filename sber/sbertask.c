@@ -183,9 +183,11 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 	switch (driver_mode){
 	case MODE_MULTI:
 		/* Just add buffer */
+		spin_lock(&rb_tree_lock);
 		ret = add_buffer(current->pid);
 		buf_node = get_buffer(current->pid);
 		buf_node->finished = 0;
+		spin_unlock(&rb_tree_lock);
 		break;
 	case MODE_SINGLE: 
 		/* Add buffer and mutex protect */
