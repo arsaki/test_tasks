@@ -152,9 +152,7 @@ static int rm_buffer(pid_t pid)
 {
 	struct rb_buf_node *rm_buffer;
         struct buffer_element *buffer_entry, *buffer_next;
-
-	spin_lock(&rb_tree_lock);
-
+	
 	rm_buffer = get_buffer(pid);
 	if (rm_buffer == NULL){
 		pr_err("sbertask: rm_buffer: buffer for pid %u not found\n", pid);
@@ -168,8 +166,7 @@ static int rm_buffer(pid_t pid)
 	rb_erase(&rm_buffer->node, &root);
 	kfree(rm_buffer);
 
-exit:	spin_unlock(&rb_tree_lock);
-
+exit:	
 	return 0;
 }
 
@@ -253,14 +250,12 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 
 	switch (driver_mode) {
 		case MODE_DEFAULT:
-			spin_lock(&buffer_lock);
 			buf_node = get_buffer(0);
 			break;
 		case MODE_SINGLE:
 			buf_node = get_buffer(0);
 			break;
 		case MODE_MULTI:
-			spin_lock(&rb_tree_lock);
                 	buf_node = get_buffer(current->pid);
 			break;
 		default:
@@ -301,10 +296,7 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	buf_node->write_ready = 1;
 	wake_up_interruptible(&buf_node->write_wq);
 
-exit:	if (driver_mode == MODE_DEFAULT)
-		spin_unlock(&buffer_lock);
-	if (driver_mode == MODE_MULTI)
-		spin_unlock(&rb_tree_lock);
+exit:
 	return ret;
 };
 
@@ -322,7 +314,6 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 			buf_node=get_buffer(0);
 			break;
 		case MODE_MULTI:
-			spin_lock(&rb_tree_lock);
                 	buf_node = get_buffer(current->pid);
 			break;
 		default:
