@@ -87,7 +87,6 @@ static int add_buffer(pid_t pid)
         struct rb_node *parent = NULL;
 	int ret = 0;
 
-	spin_lock(&rb_tree_lock);
 
 	/* Sliding on r.b. tree */
 	while (*node) {
@@ -119,7 +118,7 @@ static int add_buffer(pid_t pid)
 	init_waitqueue_head(&new_buffer->read_wq);
 	init_waitqueue_head(&new_buffer->write_wq);
 
-exit:	spin_unlock(&rb_tree_lock);
+exit:
 
 	return ret;
 }
@@ -130,7 +129,6 @@ static struct rb_buf_node *get_buffer(pid_t pid)
 	struct rb_node **node = &(root.rb_node); 
 	struct rb_buf_node * buffer;
 	
-	spin_lock(&rb_tree_lock);
 	/* Sliding on tree */
 	while (*node) {
 	        buffer = container_of(*node, struct rb_buf_node, node);
@@ -138,12 +136,9 @@ static struct rb_buf_node *get_buffer(pid_t pid)
 			node = &((*node)->rb_left);
 	      	else if (pid > buffer->pid)
 		      	node = &((*node)->rb_right);
-		else if (pid == buffer->pid){
-			spin_unlock(&rb_tree_lock);
+		else if (pid == buffer->pid)
 			return buffer;
-		}
 	}
-	spin_unlock(&rb_tree_lock);
 	pr_err("sbertask: get_buffer(): no buffer found by pid %u\n", current->pid);
 	return NULL;
 }
@@ -152,7 +147,6 @@ static int rm_buffer(pid_t pid)
 {
 	struct rb_buf_node *rm_buffer;
         struct buffer_element *buffer_entry, *buffer_next;
-	
 	rm_buffer = get_buffer(pid);
 	if (rm_buffer == NULL){
 		pr_err("sbertask: rm_buffer: buffer for pid %u not found\n", pid);
@@ -165,7 +159,6 @@ static int rm_buffer(pid_t pid)
 	}
 	rb_erase(&rm_buffer->node, &root);
 	kfree(rm_buffer);
-
 exit:	
 	return 0;
 }
@@ -177,6 +170,8 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 {
 	int ret;
 	struct rb_buf_node *buf_node;
+	spin_lock(&rb_tree_lock);
+	pr_info("sbertask: sbertask_open() spinlock acquired\n");
 	switch (driver_mode){
 	case MODE_MULTI:
 		/* Just add buffer */
@@ -187,6 +182,7 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 	case MODE_SINGLE: 
 		/* Add buffer and mutex protect */
 		if (!mutex_trylock(&mode_single_mutex)){
+			spin_unlock(&rb_tree_lock);
 			return -EBUSY;
 		}
 		ret = add_buffer(0);
@@ -202,6 +198,9 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 	default:
 		pr_err("Undefined behavior in sbertask_open\n");
 	}
+	
+	spin_unlock(&rb_tree_lock);
+	pr_info("sbertask: sbertask_opei() spinlock released\n");
 	if (!ret)
 		pr_info("sbertask: process with pid %u opened device\n", current->pid);
 	else if (ret == -ENOMEM){ 
@@ -218,23 +217,30 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 static int sbertask_release (struct inode *inode, struct file *file_p)
 {
 	struct rb_buf_node *buf_node;
+	spin_lock(&rb_tree_lock);
+	pr_info("sbertask: sbertask_release() spinlock acquired\n");
 	switch (driver_mode) {
 		case MODE_SINGLE:
 			buf_node = get_buffer(0);
 			buf_node->finished = 1;
+			spin_unlock(&rb_tree_lock);
 			wake_up_interruptible(&buf_node->read_wq);
 			mutex_unlock(&mode_single_mutex);
 			break;
 		case MODE_DEFAULT:
 			buf_node = get_buffer(0);
 			buf_node->finished = 1;
+			spin_unlock(&rb_tree_lock);
 			wake_up_interruptible(&buf_node->read_wq);
 			break;
 		case MODE_MULTI:
+			spin_unlock(&rb_tree_lock);
 			break;
 		default:
+			spin_unlock(&rb_tree_lock);
 			pr_err("Undefined_behavior in sbertask_release()\n");
 	}
+	pr_info("sbertask: sbertask_release() spinlock released");
         pr_info("sbertask: process with pid %u closes device\n", current->pid);
 	module_put(THIS_MODULE);
 	return 0;
@@ -248,6 +254,8 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 
 	pr_info("sbertask: process with pid %u reads device\n", current->pid);	
 
+	spin_lock(&rb_tree_lock);
+	pr_info("sbertask: sbertask_read() spinlock acquired\n");
 	switch (driver_mode) {
 		case MODE_DEFAULT:
 			buf_node = get_buffer(0);
@@ -261,13 +269,17 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 		default:
 			pr_err("Undefined behavior in sbertask_read()\n");
 	}
-      	if (buf_node == NULL)
+      	if (buf_node == NULL){
+		spin_unlock(&rb_tree_lock);
 		return -EINVAL;	
+	}
 	/* sleep if empty buffer */
 	if(!buf_node->buffer_head || buf_node->buffer_length == 0){
 		pr_info("sbertask: queue is empty for process with pid %u\n", current->pid);
 		buf_node->read_ready = 0;
+		spin_unlock(&rb_tree_lock);
 		wait_event_interruptible(buf_node->read_wq, buf_node->read_ready || buf_node->finished);
+		spin_lock(&rb_tree_lock);
 		if ( !buf_node->read_ready || !buf_node->buffer_length) {
 			pr_info("sbertask: go to exit\n");
 			goto exit;
@@ -297,6 +309,8 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	wake_up_interruptible(&buf_node->write_wq);
 
 exit:
+	spin_unlock(&rb_tree_lock);
+	pr_info("sbertask: sbertask_read() spinlock released\n");
 	return ret;
 };
 
@@ -306,6 +320,8 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	long unsigned i, ret = 0;
 
 	pr_info("sbertask: process with pid %u writes to device\n", current->pid);	
+	spin_lock(&rb_tree_lock);
+	pr_info("sbertask: sbertask_write() spin_lock acquired\n");
 	switch (driver_mode) {
 		case MODE_DEFAULT:
 			buf_node=get_buffer(0);
@@ -353,12 +369,11 @@ static	ssize_t sbertask_write (struct file *file_p, const char __user *buf, size
 	}
 	ret = i;
 
-exit:	if (driver_mode == MODE_DEFAULT)
-		spin_unlock(&buffer_lock);
+exit:
 	buf_node->read_ready = 1;
 	wake_up_interruptible(&buf_node->read_wq);
-	if (driver_mode == MODE_MULTI)
-		spin_unlock(&rb_tree_lock);
+	spin_unlock(&rb_tree_lock);
+	pr_info("sbertask: sbertask_write() spinlock released\n");
 	return ret;
 };
 
@@ -421,6 +436,7 @@ static void __exit module_stop(void)
 	for (node = rb_first(&root); node; node = rb_next(node)){
 		struct rb_buf_node *buf_node;
                 buf_node = container_of( node, struct rb_buf_node, node);
+		spin_lock(&buffer_lock);
 		switch (driver_mode){
 		case MODE_DEFAULT:
 		case MODE_SINGLE:
@@ -432,6 +448,7 @@ static void __exit module_stop(void)
 		default:
 			pr_err("sbertask: indefined behavior in module_stop()\n");
 		}
+		spin_unlock(&buffer_lock);
 	}
 	kmem_cache_destroy(buffer_cache);
 	unregister_chrdev(major_number, DEVICE_NAME);
