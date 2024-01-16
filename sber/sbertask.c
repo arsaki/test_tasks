@@ -10,7 +10,7 @@
  * 	Buffers aka queues uses "struct list_head". Queues depth = 1000 bytes. 
  * 	Driver modes:
  *	
- *	*Default  - one buffer,	multiple access
+ *	*Default  - one buffer,	multiple readers, one readers.
  *	*Single   - one buffer, single access
  * 	*Multi    - multiple buffers, multiple access
  *	
@@ -68,7 +68,9 @@ struct rb_buf_node {
 
 static DEFINE_SPINLOCK(buffer_lock);
 static DEFINE_SPINLOCK(rb_tree_lock);
+static struct mutex mode_default_mutex;
 static struct mutex mode_single_mutex;
+pid_t default_mode_pid_owner;
 
 static int driver_mode = MODE_DEFAULT;
 static char *mode = "default";
@@ -173,10 +175,10 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 	spin_lock(&rb_tree_lock);
 	pr_info("sbertask: sbertask_open() spinlock acquired\n");
 	switch (driver_mode){
-	case MODE_MULTI:
-		/* Just add buffer */
-		ret = add_buffer(current->pid);
-		buf_node = get_buffer(current->pid);
+	case MODE_DEFAULT:
+		/* Add buffer with pid 0 */
+		ret = add_buffer(0);
+		buf_node = get_buffer(0);
 		buf_node->finished = 0;
 		break;
 	case MODE_SINGLE: 
@@ -189,10 +191,10 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 		buf_node = get_buffer(0);
 		buf_node->finished = 0;
 		break;	
-	case MODE_DEFAULT:
-		/* Add buffer with pid 0 */
-		ret = add_buffer(0);
-		buf_node = get_buffer(0);
+	case MODE_MULTI:
+		/* Just add buffer */
+		ret = add_buffer(current->pid);
+		buf_node = get_buffer(current->pid);
 		buf_node->finished = 0;
 		break;
 	default:
@@ -220,18 +222,19 @@ static int sbertask_release (struct inode *inode, struct file *file_p)
 	spin_lock(&rb_tree_lock);
 	pr_info("sbertask: sbertask_release() spinlock acquired\n");
 	switch (driver_mode) {
-		case MODE_SINGLE:
-			buf_node = get_buffer(0);
-			buf_node->finished = 1;
-			spin_unlock(&rb_tree_lock);
-			wake_up_interruptible(&buf_node->read_wq);
-			mutex_unlock(&mode_single_mutex);
-			break;
 		case MODE_DEFAULT:
 			buf_node = get_buffer(0);
 			buf_node->finished = 1;
+			if (current->pid == default_mode_pid_owner)
+				mutex_unlock(&mode_default_mutex);
 			spin_unlock(&rb_tree_lock);
+			break;
+		case MODE_SINGLE:
+			buf_node = get_buffer(0);
+			buf_node->finished = 1;
 			wake_up_interruptible(&buf_node->read_wq);
+			spin_unlock(&rb_tree_lock);
+			mutex_unlock(&mode_single_mutex);
 			break;
 		case MODE_MULTI:
 			spin_unlock(&rb_tree_lock);
@@ -258,9 +261,19 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 	pr_info("sbertask: sbertask_read() spinlock acquired\n");
 	switch (driver_mode) {
 		case MODE_DEFAULT:
+			if (!mutex_trylock(&mode_default_mutex) && (current->pid != default_mode_pid_owner) ){
+				spin_unlock(&rb_tree_lock);
+				return -EBUSY;
+			}
+			else
+				default_mode_pid_owner = current->pid;
 			buf_node = get_buffer(0);
 			break;
 		case MODE_SINGLE:
+			if (!mutex_trylock(&mode_single_mutex)){
+				spin_unlock(&rb_tree_lock);
+				return -EBUSY;
+			}
 			buf_node = get_buffer(0);
 			break;
 		case MODE_MULTI:
@@ -280,7 +293,7 @@ static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t len
 		spin_unlock(&rb_tree_lock);
 		wait_event_interruptible(buf_node->read_wq, buf_node->read_ready || buf_node->finished);
 		spin_lock(&rb_tree_lock);
-		if ( !buf_node->read_ready || !buf_node->buffer_length) {
+		if ( !buf_node->read_ready || !buf_node->buffer_length ) {
 			pr_info("sbertask: go to exit\n");
 			goto exit;
 		}
@@ -418,9 +431,10 @@ static int __init module_start(void)
 		return -ENOMEM;
 	}
 
-	if (driver_mode == MODE_SINGLE){
+	if (driver_mode == MODE_SINGLE)
 		mutex_init(&mode_single_mutex);
-	}
+	if (driver_mode == MODE_DEFAULT)
+		mutex_init(&mode_default_mutex);
 		
 	pr_info("sbertask: module successfully loaded\n");
 
