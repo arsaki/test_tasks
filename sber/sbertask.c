@@ -89,9 +89,8 @@ static int add_buffer(pid_t pid)
         struct rb_node *parent = NULL;
 	int ret = 0;
 
-
 	/* Sliding on r.b. tree */
-	while (*node) {
+	while (*node){
 	        buffer = container_of(*node, struct rb_buf_node, node);
 		parent = *node;
 		if (pid < buffer->pid)
@@ -121,7 +120,6 @@ static int add_buffer(pid_t pid)
 	init_waitqueue_head(&new_buffer->write_wq);
 
 exit:
-
 	return ret;
 }
 
@@ -152,7 +150,7 @@ static int rm_buffer(pid_t pid)
 	rm_buffer = get_buffer(pid);
 	if (rm_buffer == NULL){
 		pr_err("sbertask: rm_buffer: buffer for pid %u not found\n", pid);
-		goto exit;
+		return -EINVAL;
 	}
  	if (rm_buffer->buffer_head != NULL){
                 list_for_each_entry_safe(buffer_entry, buffer_next, &rm_buffer->buffer_head->list, list){
@@ -161,7 +159,6 @@ static int rm_buffer(pid_t pid)
 	}
 	rb_erase(&rm_buffer->node, &root);
 	kfree(rm_buffer);
-exit:	
 	return 0;
 }
 
