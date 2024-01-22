@@ -175,23 +175,32 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 	case MODE_DEFAULT:
 		/* Add buffer with pid 0 */
 		ret = add_buffer(0);
+		if (ret == -ENOMEM)
+			goto add_buffer_error;
 		buf_node = get_buffer(0);
+		if (buf_node == NULL)
+			goto get_buffer_error;
 		buf_node->finished = 0;
 		break;
 	case MODE_SINGLE: 
 		/* Add buffer and mutex protect */
-		if (!mutex_trylock(&mode_single_mutex)){
-			spin_unlock(&rb_tree_lock);
-			return -EBUSY;
-		}
+		if (!mutex_trylock(&mode_single_mutex))
 		ret = add_buffer(0);
+		if (ret == -ENOMEM)
+			goto add_buffer_error;
 		buf_node = get_buffer(0);
+		if (buf_node == NULL)
+			goto get_buffer_error;
 		buf_node->finished = 0;
 		break;	
 	case MODE_MULTI:
 		/* Just add buffer */
 		ret = add_buffer(current->pid);
+		if (ret == -ENOMEM)
+			goto add_buffer_error;
 		buf_node = get_buffer(current->pid);
+		if (buf_node == NULL)
+			goto get_buffer_error;
 		buf_node->finished = 0;
 		break;
 	default:
@@ -199,15 +208,29 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 	}
 	
 	spin_unlock(&rb_tree_lock);
-	pr_info("sbertask: sbertask_opei() spinlock released\n");
+	pr_info("sbertask: sbertask_open() spinlock released\n");
 	if (!ret)
 		pr_info("sbertask: process with pid %u opened device\n", current->pid);
-	else if (ret == -ENOMEM){ 
-		pr_err("sbertask: error - can't allocate buffer memory for pid %u\n", current->pid);
-		return -ENOMEM;
-	} else 
-		pr_err("sbertask: unknown add_buffer() error in sbertask_open(), return code is %d \n", ret);
+	try_module_get(THIS_MODULE);
+
+	return 0;
 	
+add_buffer_error:
+	if (ret == -ENOMEM){
+		pr_err("sbertask: error - can't allocate buffer memory for pid %u\n", current->pid);
+		spin_unlock(&rb_tree_lock);
+		return -ENOMEM;
+	}
+
+get_buffer_error:
+	if (buf_node == NULL){
+		pr_err("sbertask: error - no buffer found\n");
+		spin_unlock(&rb_tree_lock);
+		return -EAGAIN;
+	}
+	
+	buf_node->finished = 0;
+
 	try_module_get(THIS_MODULE);
 
 	return 0;
