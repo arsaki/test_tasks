@@ -234,26 +234,24 @@ static int sbertask_release (struct inode *inode, struct file *file_p)
 			buf_node->finished = 1;
 			if (current->pid == default_mode_pid_owner)
 				mutex_unlock(&mode_default_mutex);
-			spin_unlock(&rb_tree_lock);
 			break;
 		case MODE_SINGLE:
 			buf_node = get_buffer(0);
 			buf_node->finished = 1;
 			wake_up_interruptible(&buf_node->read_wq);
-			spin_unlock(&rb_tree_lock);
 			mutex_unlock(&mode_single_mutex);
 			break;
 		case MODE_MULTI:
-			spin_unlock(&rb_tree_lock);
 			break;
 		default:
-			spin_unlock(&rb_tree_lock);
 			pr_err("Undefined_behavior in sbertask_release()\n");
 	}
+	spin_unlock(&rb_tree_lock);
 	pr_info("sbertask: sbertask_release() spinlock released");
         pr_info("sbertask: process with pid %u closes device\n", current->pid);
 	module_put(THIS_MODULE);
 	return 0;
+buf_node_error:
 };
 
 static  ssize_t sbertask_read (struct file *file_p, char __user *buf, size_t length, loff_t *off_p)
