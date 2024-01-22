@@ -178,9 +178,6 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 		if (ret == -ENOMEM)
 			goto add_buffer_error;
 		buf_node = get_buffer(0);
-		if (buf_node == NULL)
-			goto get_buffer_error;
-		buf_node->finished = 0;
 		break;
 	case MODE_SINGLE: 
 		/* Add buffer and mutex protect */
@@ -189,9 +186,6 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 		if (ret == -ENOMEM)
 			goto add_buffer_error;
 		buf_node = get_buffer(0);
-		if (buf_node == NULL)
-			goto get_buffer_error;
-		buf_node->finished = 0;
 		break;	
 	case MODE_MULTI:
 		/* Just add buffer */
@@ -199,20 +193,19 @@ static int sbertask_open (struct inode *inode, struct file *file_p)
 		if (ret == -ENOMEM)
 			goto add_buffer_error;
 		buf_node = get_buffer(current->pid);
-		if (buf_node == NULL)
-			goto get_buffer_error;
-		buf_node->finished = 0;
 		break;
 	default:
 		pr_err("Undefined behavior in sbertask_open\n");
+		return -EIO;
 	}
-	
+	if (buf_node == NULL)
+		goto get_buffer_error;
+	buf_node->finished = 0;
 	spin_unlock(&rb_tree_lock);
 	pr_info("sbertask: sbertask_open() spinlock released\n");
 	if (!ret)
-		pr_info("sbertask: process with pid %u opened device\n", current->pid);
+		pr_info("sbertask: process with pid %u successfully opened device\n", current->pid);
 	try_module_get(THIS_MODULE);
-
 	return 0;
 	
 add_buffer_error:
@@ -228,12 +221,6 @@ get_buffer_error:
 		spin_unlock(&rb_tree_lock);
 		return -EAGAIN;
 	}
-	
-	buf_node->finished = 0;
-
-	try_module_get(THIS_MODULE);
-
-	return 0;
 };
 
 static int sbertask_release (struct inode *inode, struct file *file_p)
